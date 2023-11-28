@@ -69,7 +69,7 @@ pipe = pipe.to("cuda")
 prompt = "apple watercolor"
 input_image = (
     load_image(
-        "<TODO>"
+        "https://raw.githubusercontent.com/huggingface/amused/main/assets/image2image_256_orig.png"
     )
     .resize((256, 256))
     .convert("RGB")
@@ -98,7 +98,7 @@ pipe = pipe.to("cuda")
 prompt = "winter mountains"
 input_image = (
     load_image(
-        "<TODO>"
+        "https://raw.githubusercontent.com/huggingface/amused/main/assets/image2image_512_orig.png"
     )
     .resize((512, 512))
     .convert("RGB")

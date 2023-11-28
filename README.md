@@ -27,7 +27,7 @@ pipe = pipe.to("cuda")
 
 prompt = "cowboy"
 image = pipe(prompt, generator=torch.Generator('cuda').manual_seed(8)).images[0]
-image.save(f'text2image_256.png')
+image.save('text2image_256.png')
 ```
 
 ![text2image_256](./assets/text2image_256.png)
@@ -46,7 +46,7 @@ pipe = pipe.to("cuda")
 
 prompt = "summer in the mountains"
 image = pipe(prompt, generator=torch.Generator('cuda').manual_seed(2)).images[0]
-image.save(f'text2image_512.png')
+image.save('text2image_512.png')
 ```
 
 ![text2image_512](./assets/text2image_512.png)
@@ -76,7 +76,7 @@ input_image = (
 )
 
 image = pipe(prompt, input_image, strength=0.7, generator=torch.Generator('cuda').manual_seed(3)).images[0]
-image.save(f'image2image_256.png')
+image.save('image2image_256.png')
 ```
 
 ![image2image_256_orig](./assets/image2image_256_orig.png) 
@@ -105,7 +105,7 @@ input_image = (
 )
 
 image = pipe(prompt, input_image, generator=torch.Generator('cuda').manual_seed(15)).images[0]
-image.save(f'image2image_512.png')
+image.save('image2image_512.png')
 ```
 
 ![image2image_512_orig](./assets/image2image_512_orig.png) 
@@ -131,20 +131,25 @@ pipe = pipe.to("cuda")
 prompt = "fall mountains"
 input_image = (
     load_image(
-        "https://huggingface.co/datasets/diffusers/docs-images/resolve/main/open_muse/mountains_1.jpg"
+        "https://raw.githubusercontent.com/huggingface/amused/main/assets/inpainting_512_orig.jpeg"
     )
     .resize((512, 512))
     .convert("RGB")
 )
 mask = (
     load_image(
-        "https://huggingface.co/datasets/diffusers/docs-images/resolve/main/open_muse/mountains_1_mask.png"
+        "https://raw.githubusercontent.com/huggingface/amused/main/assets/inpainting_512_mask.png"
     )
     .resize((512, 512))
     .convert("L")
 )
-image = pipe(prompt, input_image, mask).images[0]
+image = pipe(prompt, input_image, mask, generator=torch.Generator('cuda').manual_seed(0)).images[0]
+image.save('inpainting_512.png')
 ```
+
+![inpainting_512_orig](./assets/inpainting_512_orig.jpeg) 
+![inpainting_512_mask](./assets/inpainting_512_mask.png) 
+![inpainting_512](./assets/inpainting_512.png)
 
 ## 2. Performance
 

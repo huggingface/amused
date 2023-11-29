@@ -343,25 +343,6 @@ def collate_fn(examples):
     return batch
 
 
-class AverageMeter(object):
-    """Computes and stores the average and current value"""
-
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
-
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
-
-
 def main():
     #########################
     # SETUP Accelerator     #
@@ -827,9 +808,6 @@ def main():
         )
         return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight, clip_embeds, micro_conds
 
-    batch_time_m = AverageMeter()
-    data_time_m = AverageMeter()
-    end = time.time()
     # As stated above, we are not doing epoch based training here, but just using this for book keeping and being able to
     # reuse the same training loop with other datasets/loaders.
     for epoch in range(first_epoch, num_train_epochs):
@@ -843,7 +821,6 @@ def main():
 
             pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
             input_ids = input_ids.to(accelerator.device, non_blocking=True)
-            data_time_m.update(time.time() - end)
 
             # encode images to image tokens, mask them and create input and labels
             (
@@ -928,35 +905,20 @@ def main():
                 if config.training.get("use_ema", False):
                     ema.step(model.parameters())
 
-                batch_time_m.update(time.time() - end)
-                end = time.time()
-
                 # Log metrics
                 if (global_step + 1) % config.experiment.log_every == 0:
-                    samples_per_second_per_gpu = (
-                        config.training.gradient_accumulation_steps * config.training.batch_size / batch_time_m.val
-                    )
                     logs = {
                         "step_loss": avg_loss.item(),
                         "lr": lr_scheduler.get_last_lr()[0],
                         "avg_masking_rate": avg_masking_rate.item(),
-                        "samples/sec/gpu": samples_per_second_per_gpu,
-                        "data_time": data_time_m.val,
-                        "batch_time": batch_time_m.val,
                     }
                     accelerator.log(logs, step=global_step + 1)
 
                     logger.info(
                         f"Step: {global_step + 1} "
                         f"Loss: {avg_loss.item():0.4f} "
-                        f"Data (t): {data_time_m.val:0.4f}, {samples_per_second_per_gpu:0.2f}/s/gpu "
-                        f"Batch (t): {batch_time_m.val:0.4f} "
                         f"LR: {lr_scheduler.get_last_lr()[0]:0.6f}"
                     )
-
-                    # resetting batch / data time meters per log window
-                    batch_time_m.reset()
-                    data_time_m.reset()
 
 
                 # Save model checkpoint
@@ -1021,7 +983,6 @@ def main():
                         ema.restore(model.parameters())
 
                 global_step += 1
-                # TODO: Add generation
 
             # Stop training if max steps is reached
             if global_step >= config.training.max_train_steps:

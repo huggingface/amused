@@ -128,14 +128,14 @@ pipe = pipe.to("cuda")
 prompt = "a man with glasses"
 input_image = (
     load_image(
-        "https://raw.githubusercontent.com/huggingface/open-muse/main/inpainting_validation/a%20man%20with%20glasses/image.jpeg"
+        "https://raw.githubusercontent.com/huggingface/amused/main/assets/inpainting_256_orig.png"
     )
     .resize((256, 256))
     .convert("RGB")
 )
 mask = (
     load_image(
-        "https://raw.githubusercontent.com/huggingface/open-muse/main/inpainting_validation/a%20man%20with%20glasses/mask.png"
+        "https://raw.githubusercontent.com/huggingface/amused/main/assets/inpainting_256_mask.png"
     )
     .resize((256, 256))
     .convert("L")

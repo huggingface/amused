@@ -35,7 +35,6 @@ from accelerate.logging import get_logger
 from accelerate.utils import DistributedType, set_seed
 from data import ClassificationDataset, Text2ImageDataset
 from omegaconf import DictConfig, ListConfig, OmegaConf
-from optimizer import Lion
 from PIL import Image
 from PIL.ImageOps import exif_transpose
 from torch.optim import AdamW  # why is shampoo not available in PT :(
@@ -578,8 +577,6 @@ def main():
                 "To use 8-bit Adam, please install the bitsandbytes library: `pip install bitsandbytes`."
             )
         optimizer_cls = bnb.optim.AdamW8bit
-    elif optimizer_type == "lion":
-        optimizer_cls = Lion
     else:
         raise ValueError(f"Optimizer {optimizer_type} not supported")
     

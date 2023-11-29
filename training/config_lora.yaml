@@ -127,7 +127,6 @@ training:
     use_stochastic_code: False
     soft_code_temp: 1.0
     mask_contiguous_region_prob: 0.0
-    use_aesthetic_score: True
     lora_r: 16
     lora_alpha: 32
     lora_target_modules: ["query", "key", "value"]

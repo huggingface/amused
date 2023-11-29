@@ -857,12 +857,9 @@ def generate_images(
     clip_embeds = outputs[0]
 
     resolution = config.dataset.preprocessing.resolution
-    if config.training.get("use_aesthetic_score", False):
-        micro_conds = torch.tensor(
-            [resolution, resolution, 0, 0, 6], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype
-        )
-    else:
-        micro_conds = torch.tensor([resolution, resolution, 0, 0], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype)
+    micro_conds = torch.tensor(
+        [resolution, resolution, 0, 0, 6], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype
+    )
     micro_conds = micro_conds.unsqueeze(0).repeat(encoder_hidden_states.shape[0], 1)
     
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
@@ -885,19 +882,16 @@ def generate_images(
     # so we clamp them to the correct range.
     gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
     
-    if config.training.get("split_vae_encode", False):
-        split_batch_size = config.training.split_vae_encode
-        # Use a batch of at most split_vae_encode images to encode and then concat the results
-        batch_size = gen_token_ids.shape[0]
-        num_splits = math.ceil(batch_size / split_batch_size)
-        images = []
-        for i in range(num_splits):
-            start_idx = i * split_batch_size
-            end_idx = min((i + 1) * split_batch_size, batch_size)
-            images.append(vq_model.decode_code(gen_token_ids[start_idx:end_idx]))
-        images = torch.cat(images, dim=0)
-    else:
-        images = vq_model.decode_code(gen_token_ids)
+    batch_size = gen_token_ids.shape[0]
+    split_batch_size = config.training.get("split_vae_encode", batch_size)
+    # Use a batch of at most split_vae_encode images to encode and then concat the results
+    num_splits = math.ceil(batch_size / split_batch_size)
+    images = []
+    for i in range(num_splits):
+        start_idx = i * split_batch_size
+        end_idx = min((i + 1) * split_batch_size, batch_size)
+        images.append(vq_model.decode_code(gen_token_ids[start_idx:end_idx]))
+    images = torch.cat(images, dim=0)
     
     model.train()
 
@@ -977,19 +971,16 @@ def generate_inpainting_images(
     # so we clamp them to the correct range.
     gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
 
-    if config.training.get("split_vae_encode", False):
-        split_batch_size = config.training.split_vae_encode
-        # Use a batch of at most split_vae_encode images to decode and then concat the results
-        batch_size = gen_token_ids.shape[0]
-        num_splits = math.ceil(batch_size / split_batch_size)
-        images = []
-        for i in range(num_splits):
-            start_idx = i * split_batch_size
-            end_idx = min((i + 1) * split_batch_size, batch_size)
-            images.append(vq_model.decode_code(gen_token_ids[start_idx:end_idx]))
-        images = torch.cat(images, dim=0)
-    else:
-        images = vq_model.decode_code(gen_token_ids)
+    batch_size = gen_token_ids.shape[0]
+    split_batch_size = config.training.get("split_vae_encode", batch_size)
+    # Use a batch of at most split_vae_encode images to decode and then concat the results
+    num_splits = math.ceil(batch_size / split_batch_size)
+    images = []
+    for i in range(num_splits):
+        start_idx = i * split_batch_size
+        end_idx = min((i + 1) * split_batch_size, batch_size)
+        images.append(vq_model.decode_code(gen_token_ids[start_idx:end_idx]))
+    images = torch.cat(images, dim=0)
 
     # Convert to PIL images
     images = 2.0 * images - 1.0
@@ -1107,19 +1098,16 @@ def prepare_inputs_and_labels(
 ):
     soft_targets = None
 
-    if config.training.get("split_vae_encode", False):
-        split_batch_size = config.training.split_vae_encode
-        # Use a batch of at most split_vae_encode images to encode and then concat the results
-        batch_size = pixel_values_or_image_ids.shape[0]
-        num_splits = math.ceil(batch_size / split_batch_size)
-        image_tokens = []
-        for i in range(num_splits):
-            start_idx = i * split_batch_size
-            end_idx = min((i + 1) * split_batch_size, batch_size)
-            image_tokens.append(vq_model.get_code(pixel_values_or_image_ids[start_idx:end_idx]))
-        image_tokens = torch.cat(image_tokens, dim=0)
-    else:
-        image_tokens = vq_model.get_code(pixel_values_or_image_ids)
+    batch_size = pixel_values_or_image_ids.shape[0]
+    split_batch_size = config.training.get("split_vae_encode", batch_size)
+    # Use a batch of at most split_vae_encode images to encode and then concat the results
+    num_splits = math.ceil(batch_size / split_batch_size)
+    image_tokens = []
+    for i in range(num_splits):
+        start_idx = i * split_batch_size
+        end_idx = min((i + 1) * split_batch_size, batch_size)
+        image_tokens.append(vq_model.get_code(pixel_values_or_image_ids[start_idx:end_idx]))
+    image_tokens = torch.cat(image_tokens, dim=0)
 
     outputs = text_encoder(text_input_ids_or_embeds, return_dict=True, output_hidden_states=True)
     encoder_hidden_states = outputs.hidden_states[-2]
@@ -1128,13 +1116,10 @@ def prepare_inputs_and_labels(
     original_sizes = list(map(list, zip(*batch["orig_size"])))
     crop_coords = list(map(list, zip(*batch["crop_coords"])))
     
-    if config.training.get("use_aesthetic_score", False):
-        aesthetic_scores = batch["aesthetic_score"]
-        micro_conds = torch.cat(
-            [torch.tensor(original_sizes).cpu(), torch.tensor(crop_coords).cpu(), aesthetic_scores.unsqueeze(-1).cpu()], dim=-1
-        )
-    else:
-        micro_conds = torch.cat([torch.tensor(original_sizes), torch.tensor(crop_coords)], dim=-1)
+    aesthetic_scores = batch["aesthetic_score"]
+    micro_conds = torch.cat(
+        [torch.tensor(original_sizes).cpu(), torch.tensor(crop_coords).cpu(), aesthetic_scores.unsqueeze(-1).cpu()], dim=-1
+    )
     
     micro_conds = micro_conds.to(clip_embeds.device, non_blocking=True)
 

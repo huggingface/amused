@@ -200,7 +200,7 @@ Amused inherits performance benefits from original [muse](https://arxiv.org/pdf/
 
 2. Fewer sampling steps: Compared to many diffusion models, muse requires fewer samples.
 
-Additionally, amused uses the smaller CLIP as its text encoder instead of T5 compared to muse. Amused is also smaller with ~600M params compared the largest 3B param muse model.
+Additionally, amused uses the smaller CLIP as its text encoder instead of T5 compared to muse. Amused is also smaller with ~600M params compared the largest 3B param muse model. Note though that amused being a smaller has lower quality.
 
 ![a100_bs_1](./assets/a100_bs_1.png)
 ![a100_bs_8](./assets/a100_bs_8.png)

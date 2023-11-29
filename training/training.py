@@ -417,9 +417,7 @@ def main():
     #########################
     logger.info("Loading models and optimizer")
 
-    is_adapter = config.experiment.get("is_adapter", False)
     is_lora = config.experiment.get("is_lora", False)
-    is_text_encoder_lora = config.experiment.get("is_text_encoder_lora", False)
 
     text_encoder = CLIPTextModelWithProjection.from_pretrained(config.model.text_encoder.pretrained, projection_dim=768)
     tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
@@ -429,17 +427,8 @@ def main():
     vq_class = get_vq_model_class(config.model.vq_model.type)
     vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
 
-    if is_text_encoder_lora:
-        text_lora_config = LoraConfig(
-            r=config.training.get("lora_r", 8),
-            target_modules=["q_proj", "k_proj", "v_proj"],
-            lora_alpha=config.training.get("lora_alpha", 32),
-        )
-        text_encoder = get_peft_model(text_encoder, text_lora_config)
-
     # Freeze the text model and VQGAN
-    if not is_text_encoder_lora:
-        text_encoder.requires_grad_(False)
+    text_encoder.requires_grad_(False)
     vq_model.requires_grad_(False)
 
     model_cls = MaskGitTransformer if config.model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
@@ -448,7 +437,7 @@ def main():
     else:
         model = model_cls(**config.model.transformer)
     
-    if is_adapter or is_lora:
+    if is_lora:
         pretrained_model = MaskGiTUViT.from_pretrained(
             "valhalla/research-run-finetuned-journeydb", subfolder="ema_model", revision="06bcd6ab6580a2ed3275ddfc17f463b8574457da"
         )
@@ -464,7 +453,6 @@ def main():
         model = get_peft_model(model, lora_config)
     
     mask_id = model.config.mask_token_id
-    output_size = model.output_size
 
     # Create EMA
     if config.training.get("use_ema", False):
@@ -529,32 +517,18 @@ def main():
     else:
         raise ValueError(f"Optimizer {optimizer_type} not supported")
     
-    if is_adapter:
-        # freeze all parameters except the adapter
-        model.requires_grad_(False)
-        model.adapter.requires_grad_(True)
-        optimizer_grouped_parameters = list(model.adapter.parameters())
-    else:
-        # no decay on bias and layernorm and embedding
-        no_decay = ["bias", "layer_norm.weight", "mlm_ln.weight", "embeddings.weight"]
-        optimizer_grouped_parameters = [
-            {
-                "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
-                "weight_decay": optimizer_config.weight_decay,
-            },
-            {
-                "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
-                "weight_decay": 0.0,
-            },
-        ]
-
-        if is_text_encoder_lora:
-            optimizer_grouped_parameters += [
-                {
-                    "params": text_encoder.parameters(),
-                    "weight_decay": optimizer_config.weight_decay,
-                },
-            ]
+    # no decay on bias and layernorm and embedding
+    no_decay = ["bias", "layer_norm.weight", "mlm_ln.weight", "embeddings.weight"]
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+            "weight_decay": optimizer_config.weight_decay,
+        },
+        {
+            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
+            "weight_decay": 0.0,
+        },
+    ]
 
     optimizer = optimizer_cls(
         optimizer_grouped_parameters,
@@ -618,11 +592,9 @@ def main():
 
     # Prepare everything with accelerator
     logger.info("Preparing model, optimizer and dataloaders")
-    if is_adapter or is_lora:
+    if is_lora:
         model, optimizer, lr_scheduler, train_dataloader = accelerator.prepare(model, optimizer, lr_scheduler, train_dataloader)
         train_dataloader.num_batches = len(train_dataloader)
-    elif is_text_encoder_lora:
-        model, text_encoder, optimizer, lr_scheduler = accelerator.prepare(model, text_encoder, optimizer, lr_scheduler)
     else:
         # The dataloader are already aware of distributed training, so we don't need to prepare them.
         model, optimizer, lr_scheduler = accelerator.prepare(model, optimizer, lr_scheduler)
@@ -636,8 +608,7 @@ def main():
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
-    if not is_text_encoder_lora:
-        text_encoder.to(device=accelerator.device, dtype=weight_dtype)
+    text_encoder.to(device=accelerator.device, dtype=weight_dtype)
     vq_model.to(device=accelerator.device)
     if config.training.get("use_ema", False):
         ema.to(accelerator.device)
@@ -737,13 +708,9 @@ def main():
             else:
                 image_tokens = vq_model.get_code(pixel_values_or_image_ids)
 
-        if is_text_encoder_lora and is_train:
-            encoder_hidden_states = None
-            clip_embeds = None
-        else:
-            outputs = text_encoder(text_input_ids_or_embeds, return_dict=True, output_hidden_states=True)
-            encoder_hidden_states = outputs.hidden_states[-2]
-            clip_embeds = outputs[0]
+        outputs = text_encoder(text_input_ids_or_embeds, return_dict=True, output_hidden_states=True)
+        encoder_hidden_states = outputs.hidden_states[-2]
+        clip_embeds = outputs[0]
 
         if config.model.transformer.get("add_micro_cond_embeds", False):
             original_sizes = list(map(list, zip(*batch["orig_size"])))
@@ -800,12 +767,6 @@ def main():
 
             # Train Step
             with accelerator.accumulate(model):
-                if is_text_encoder_lora:
-                    inputs = batch["input_ids"].to(accelerator.device, non_blocking=True)
-                    outputs = text_encoder(inputs, return_dict=True, output_hidden_states=True)
-                    encoder_hidden_states = outputs.hidden_states[-2]
-                    cond_embeds = outputs[0]
-                
                 if config.training.cond_dropout_prob > 0.0:
                     assert encoder_hidden_states is not None
 
@@ -947,7 +908,7 @@ def main():
     accelerator.wait_for_everyone()
 
     # Evaluate and save checkpoint at the end of training
-    if accelerator.is_main_process and not is_adapter and not is_lora:
+    if accelerator.is_main_process and not is_lora:
         validate_model(
             model,
             eval_dataloader,
@@ -1296,10 +1257,6 @@ def save_checkpoint(model, text_encoder, config, accelerator, global_step):
         )
         json.dump({"global_step": global_step}, (save_path / "metadata.json").open("w+"))
         logger.info(f"Saved state to {save_path}")
-
-        if config.experiment.get("is_text_encoder_lora", False):
-            unwrapped_model = accelerator.unwrap_model(text_encoder)
-            unwrapped_model.save_pretrained(save_path / "text_encoder_lora")
 
     accelerator.save_state(save_path)
     logger.info(f"Saved state to {save_path}")

@@ -669,7 +669,6 @@ def main():
     def prepare_inputs_and_labels(
         pixel_values_or_image_ids: Union[torch.FloatTensor, torch.LongTensor],
         text_input_ids_or_embeds: Union[torch.LongTensor, torch.LongTensor],
-        min_masking_rate: float = 0.0,
         batch: Any = None,
         is_train: bool = True,
     ):
@@ -740,7 +739,7 @@ def main():
                 loss_weight,
                 cond_embeds,
                 micro_conds,
-            ) = prepare_inputs_and_labels(pixel_values, input_ids, config.training.min_masking_rate, batch=batch)
+            ) = prepare_inputs_and_labels(pixel_values, input_ids, batch=batch)
 
             # log the inputs for the first step of the first epoch
             if global_step == 0 and epoch == 0:

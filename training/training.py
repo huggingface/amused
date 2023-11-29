@@ -55,12 +55,13 @@ from muse import (
     MaskGitVQGAN,
     PaellaVQModel,
     VQGANModel,
-    get_mask_chedule,
 )
 from muse.lr_schedulers import get_scheduler
 
 logger = get_logger(__name__, log_level="INFO")
 
+def mask_schedule(t):
+    return torch.cos(t * math.pi * 0.5)
 
 def get_config():
     cli_conf = OmegaConf.from_cli()
@@ -138,7 +139,7 @@ def get_loss_weight(t, mask, min_val=0.3):
     return 1 - (1 - mask) * ((1 - t) * (1 - min_val))[:, None]
 
 
-def mask_and_replace(image_tokens, timestep, mask_schedule, mask_id, vocab_size, replace_factor=0.25):
+def mask_and_replace(image_tokens, timestep, mask_id, vocab_size, replace_factor=0.25):
     batch_size, seq_len = image_tokens.shape
 
     # calculate the probability of replacing each token with [MASK] and probability of replacing with random token
@@ -161,7 +162,7 @@ def mask_and_replace(image_tokens, timestep, mask_schedule, mask_id, vocab_size,
     return masked_tokens, mask
 
 
-def mask_or_random_replace_tokens(image_tokens, mask_id, config, mask_schedule, is_train=True):
+def mask_or_random_replace_tokens(image_tokens, mask_id, config, is_train=True):
     batch_size, seq_len = image_tokens.shape
 
     if not is_train and config.training.get("eval_mask_ratios", None):
@@ -229,7 +230,7 @@ def mask_or_random_replace_tokens(image_tokens, mask_id, config, mask_schedule, 
     elif noise_type == "mask_and_random_replace":
         replace_factor = config.training.get("replace_factor", 0.25)
         input_ids, mask = mask_and_replace(
-            image_tokens, timesteps, mask_schedule, mask_id, config.model.transformer.codebook_size, replace_factor=replace_factor
+            image_tokens, timesteps, mask_id, config.model.transformer.codebook_size, replace_factor=replace_factor
         )
     else:
         raise ValueError(f"noise_type {config.training.noise_type} not supported")
@@ -537,20 +538,11 @@ def main():
         eps=optimizer_config.epsilon,
     )
 
-    # Cretae mask scheduler
-    if config.get("mask_schedule", None) is not None:
-        schedule = config.mask_schedule.schedule
-        args = config.mask_schedule.get("params", {})
-        mask_schedule = get_mask_chedule(schedule, **args)
-    else:
-        mask_schedule = get_mask_chedule(config.training.get("mask_schedule", "cosine"))
-
     ##################################
     # DATLOADER and LR-SCHEDULER     #
     #################################
     logger.info("Creating dataloaders and lr_scheduler")
 
-    total_batch_size_without_accum = config.training.batch_size * accelerator.num_processes
     total_batch_size = (
         config.training.batch_size * accelerator.num_processes * config.training.gradient_accumulation_steps
     )
@@ -732,7 +724,6 @@ def main():
             image_tokens,
             mask_id,
             config,
-            mask_schedule=mask_schedule,
             is_train=is_train,
         )
         return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight, clip_embeds, micro_conds
@@ -875,7 +866,6 @@ def main():
                         accelerator,
                         config,
                         global_step + 1,
-                        mask_schedule=mask_schedule,
                         empty_embeds=empty_embeds,
                         empty_clip_embeds=empty_clip_embeds,
                     )
@@ -888,7 +878,6 @@ def main():
                     #     accelerator,
                     #     config,
                     #     global_step + 1,
-                    #     mask_schedule=mask_schedule,
                     #     empty_embeds=empty_embeds,
                     #     empty_clip_embeds=empty_clip_embeds,
                     # )
@@ -990,7 +979,6 @@ def generate_images(
     accelerator,
     config,
     global_step,
-    mask_schedule,
     empty_embeds=None,
     empty_clip_embeds=None,
 ):
@@ -1087,7 +1075,6 @@ def generate_inpainting_images(
     accelerator,
     config,
     global_step,
-    mask_schedule,
     empty_embeds=None,
     empty_clip_embeds=None,
 ):

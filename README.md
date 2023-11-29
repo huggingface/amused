@@ -254,3 +254,11 @@ image.save('text2image_256.png')
 ## 4. Acknowledgements
 
 ## 5. Citation
+@misc{patil-etal-2023-amused,
+  author = {Suraj Patil and William Berman and Patrick von Platen},
+  title = {Amused: An open MUSE model},
+  year = {2023},
+  publisher = {GitHub},
+  journal = {GitHub repository},
+  howpublished = {\url{https://github.com/huggingface/amused}}
+}

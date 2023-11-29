@@ -535,20 +535,89 @@ def main():
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         for batch in train_dataloader:
-            pixel_values, input_ids = batch["image"], batch["input_ids"]
+            with torch.no_grad():
+                pixel_values, input_ids = batch["image"], batch["input_ids"]
 
-            pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
-            input_ids = input_ids.to(accelerator.device, non_blocking=True)
+                pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
+                input_ids = input_ids.to(accelerator.device, non_blocking=True)
+                batch_size = pixel_values.shape[0]
+                split_batch_size = config.training.get("split_vae_encode", batch_size)
+                # Use a batch of at most split_vae_encode images to encode and then concat the results
+                num_splits = math.ceil(batch_size / split_batch_size)
+                image_tokens = []
+                for i in range(num_splits):
+                    start_idx = i * split_batch_size
+                    end_idx = min((i + 1) * split_batch_size, batch_size)
+                    image_tokens.append(vq_model.get_code(pixel_values[start_idx:end_idx]))
+                image_tokens = torch.cat(image_tokens, dim=0)
 
-            # encode images to image tokens, mask them and create input and labels
-            (
-                input_ids,
-                encoder_hidden_states,
-                labels,
-                mask_prob,
-                cond_embeds,
-                micro_conds,
-            ) = prepare_inputs_and_labels(pixel_values, input_ids, config, vq_model, text_encoder, mask_id, batch)
+                outputs = text_encoder(input_ids, return_dict=True, output_hidden_states=True)
+                encoder_hidden_states = outputs.hidden_states[-2]
+                cond_embeds = outputs[0]
+
+                original_sizes = list(map(list, zip(*batch["orig_size"])))
+                crop_coords = list(map(list, zip(*batch["crop_coords"])))
+    
+                aesthetic_scores = batch["aesthetic_score"]
+                micro_conds = torch.cat(
+                    [torch.tensor(original_sizes).cpu(), torch.tensor(crop_coords).cpu(), aesthetic_scores.unsqueeze(-1).cpu()], dim=-1
+                )
+    
+                micro_conds = micro_conds.to(cond_embeds.device, non_blocking=True)
+
+                batch_size, seq_len = image_tokens.shape
+
+                # Sample a random timestep for each image
+                timesteps = torch.rand(batch_size, device=image_tokens.device)
+                # Sample a random mask probability for each image using timestep and cosine schedule
+                mask_prob = mask_schedule(timesteps)
+                mask_prob = mask_prob.clip(config.training.min_masking_rate)
+
+                # creat a random mask for each image
+                num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
+
+                mask_contiguous_region_prob = config.training.get("mask_contiguous_region_prob", None)
+
+                if mask_contiguous_region_prob is None:
+                    mask_contiguous_region = False
+                else:
+                    mask_contiguous_region = random.random() < mask_contiguous_region_prob
+
+                if not mask_contiguous_region:
+                    batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
+                    mask = batch_randperm < num_token_masked.unsqueeze(-1)
+                else:
+                    resolution = int(seq_len**0.5)
+                    mask = torch.zeros((batch_size, resolution, resolution), device=image_tokens.device)
+
+                    # TODO - would be nice to vectorize
+                    for batch_idx, num_token_masked_ in enumerate(num_token_masked):
+                        num_token_masked_ = int(num_token_masked_.item())
+
+                        # NOTE: a bit handwavy with the bounds but gets a rectangle of ~num_token_masked_
+                        num_token_masked_height = random.randint(
+                            math.ceil(num_token_masked_ / resolution), min(resolution, num_token_masked_)
+                        )
+                        num_token_masked_height = min(num_token_masked_height, resolution)
+
+                        num_token_masked_width = math.ceil(num_token_masked_ / num_token_masked_height)
+                        num_token_masked_width = min(num_token_masked_width, resolution)
+
+                        start_idx_height = random.randint(0, resolution - num_token_masked_height)
+                        start_idx_width = random.randint(0, resolution - num_token_masked_width)
+
+                        mask[
+                            batch_idx,
+                            start_idx_height : start_idx_height + num_token_masked_height,
+                            start_idx_width : start_idx_width + num_token_masked_width,
+                        ] = 1
+
+                    mask = mask.reshape(batch_size, seq_len)
+                    mask = mask.to(torch.bool)
+
+                # mask images and create input and labels
+                input_ids = torch.where(mask, mask_id, image_tokens)
+                labels = torch.where(mask, image_tokens, -100)
 
             # log the inputs for the first step of the first epoch
             if global_step == 0 and epoch == 0:
@@ -946,97 +1015,6 @@ def save_checkpoint(model, config, accelerator, global_step):
 
     accelerator.save_state(save_path)
     logger.info(f"Saved state to {save_path}")
-
-@torch.no_grad()
-def prepare_inputs_and_labels(
-    pixel_values_or_image_ids: Union[torch.FloatTensor, torch.LongTensor],
-    text_input_ids_or_embeds: Union[torch.LongTensor, torch.LongTensor],
-    config,
-    vq_model,
-    text_encoder,
-    mask_id,
-    batch,
-):
-    batch_size = pixel_values_or_image_ids.shape[0]
-    split_batch_size = config.training.get("split_vae_encode", batch_size)
-    # Use a batch of at most split_vae_encode images to encode and then concat the results
-    num_splits = math.ceil(batch_size / split_batch_size)
-    image_tokens = []
-    for i in range(num_splits):
-        start_idx = i * split_batch_size
-        end_idx = min((i + 1) * split_batch_size, batch_size)
-        image_tokens.append(vq_model.get_code(pixel_values_or_image_ids[start_idx:end_idx]))
-    image_tokens = torch.cat(image_tokens, dim=0)
-
-    outputs = text_encoder(text_input_ids_or_embeds, return_dict=True, output_hidden_states=True)
-    encoder_hidden_states = outputs.hidden_states[-2]
-    cond_embeds = outputs[0]
-
-    original_sizes = list(map(list, zip(*batch["orig_size"])))
-    crop_coords = list(map(list, zip(*batch["crop_coords"])))
-    
-    aesthetic_scores = batch["aesthetic_score"]
-    micro_conds = torch.cat(
-        [torch.tensor(original_sizes).cpu(), torch.tensor(crop_coords).cpu(), aesthetic_scores.unsqueeze(-1).cpu()], dim=-1
-    )
-    
-    micro_conds = micro_conds.to(cond_embeds.device, non_blocking=True)
-
-    batch_size, seq_len = image_tokens.shape
-
-    # Sample a random timestep for each image
-    timesteps = torch.rand(batch_size, device=image_tokens.device)
-    # Sample a random mask probability for each image using timestep and cosine schedule
-    mask_prob = mask_schedule(timesteps)
-    mask_prob = mask_prob.clip(config.training.min_masking_rate)
-
-    # creat a random mask for each image
-    num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
-
-    mask_contiguous_region_prob = config.training.get("mask_contiguous_region_prob", None)
-
-    if mask_contiguous_region_prob is None:
-        mask_contiguous_region = False
-    else:
-        mask_contiguous_region = random.random() < mask_contiguous_region_prob
-
-    if not mask_contiguous_region:
-        batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
-        mask = batch_randperm < num_token_masked.unsqueeze(-1)
-    else:
-        resolution = int(seq_len**0.5)
-        mask = torch.zeros((batch_size, resolution, resolution), device=image_tokens.device)
-
-        # TODO - would be nice to vectorize
-        for batch_idx, num_token_masked_ in enumerate(num_token_masked):
-            num_token_masked_ = int(num_token_masked_.item())
-
-            # NOTE: a bit handwavy with the bounds but gets a rectangle of ~num_token_masked_
-            num_token_masked_height = random.randint(
-                math.ceil(num_token_masked_ / resolution), min(resolution, num_token_masked_)
-            )
-            num_token_masked_height = min(num_token_masked_height, resolution)
-
-            num_token_masked_width = math.ceil(num_token_masked_ / num_token_masked_height)
-            num_token_masked_width = min(num_token_masked_width, resolution)
-
-            start_idx_height = random.randint(0, resolution - num_token_masked_height)
-            start_idx_width = random.randint(0, resolution - num_token_masked_width)
-
-            mask[
-                batch_idx,
-                start_idx_height : start_idx_height + num_token_masked_height,
-                start_idx_width : start_idx_width + num_token_masked_width,
-            ] = 1
-
-        mask = mask.reshape(batch_size, seq_len)
-        mask = mask.to(torch.bool)
-
-    # mask images and create input and labels
-    input_ids = torch.where(mask, mask_id, image_tokens)
-    labels = torch.where(mask, image_tokens, -100)
-
-    return input_ids, encoder_hidden_states, labels, mask_prob, cond_embeds, micro_conds
 
 
 if __name__ == "__main__":

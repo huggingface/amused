@@ -249,8 +249,8 @@ image.save('text2image_256.png')
 
 ## 3. Training
 
-## 4. Finetuning
+### Styledrop
 
-## 5. Acknowledgements
+## 4. Acknowledgements
 
-## 6. Citation
+## 5. Citation

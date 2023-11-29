@@ -208,16 +208,18 @@ Additionally, amused uses the smaller CLIP as its text encoder instead of T5 com
 ![4090_bs_1](./assets/4090_bs_1.png)
 ![4090_bs_8](./assets/4090_bs_8.png)
 
+### Muse performance knobs
+
+|                     | Uncompiled Transformer + regular attention | Uncompiled Transformer + flash attention (ms) | Compiled Transformer (ms) | Speed Up |
+|---------------------|--------------------------------------------|-------------------------|----------------------|----------|
+| 256 Batch Size 1    |                594.7                      |         507.7                |    212.1                  |   58%       |
+| 512 Batch Size 1    |                637                      |        547                 |       249.9               |     54%     |
+| 256 Batch Size 8    |                719                      |        628.6                 |        427.8              |    32%      |
+| 512 Batch Size 8    |                  1000                    |         917.7                |       703.6               |    23%      |
+
+Flash attention is enabled by default in the diffusers codebase through torch `F.scaled_dot_product_attention`
+
 ### torch.compile
-Compiling the transformer offers significant speedups.
-
-|                     | Uncompiled Transformer (ms) | Compiled Transformer (ms) | Speed Up |
-|---------------------|-------------------------|----------------------|----------|
-| 256 Batch Size 1    |         507.7                |    212.1                  |   58%       |
-| 512 Batch Size 1    |        547                 |       249.9               |     54%     |
-| 256 Batch Size 8    |        628.6                 |        427.8              |    32%      |
-| 512 Batch Size 8    |         917.7                |       703.6               |    23%      |
-
 To use torch.compile, simply wrap the transformer in torch.compile i.e.
 
 ```python
@@ -244,11 +246,6 @@ prompt = "cowboy"
 image = pipe(prompt, generator=torch.Generator('cuda').manual_seed(8)).images[0]
 image.save('text2image_256.png')
 ```
-
-### flash attention
-
-### fused rms norm blocks
-
 
 ## 3. Training
 

@@ -1,5 +1,7 @@
 # amused
 
+![collage](./assets/collage.png)
+
 [[Paper]]()
 [[Models]]()
 [[Colab]]()

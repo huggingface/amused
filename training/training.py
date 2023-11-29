@@ -19,18 +19,16 @@ import math
 import os
 import random
 import shutil
-import time
 from pathlib import Path
 from typing import Any, List, Tuple, Union
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import DistributedType, set_seed
+from accelerate.utils import set_seed
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from PIL import Image
 from PIL.ImageOps import exif_transpose
@@ -181,29 +179,6 @@ class AdapterDataset(Dataset):
         )
         example["input_ids"] = text_inputs.input_ids[0]
         return example
-
-
-def collate_fn(examples):
-    input_ids = [example["instance_prompt_ids"] for example in examples]
-    pixel_values = [example["instance_images"] for example in examples]
-    orig_size = [example["orig_size"] for example in examples]
-    crop_coords = [example["crop_coords"] for example in examples]
-    aes_score = [example["aesthetic_score"] for example in examples]
-
-    pixel_values = torch.stack(pixel_values)
-    pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
-
-    input_ids = torch.cat(input_ids, dim=0)
-    aes_score = torch.tensor(aes_score)
-
-    batch = {
-        "input_ids": input_ids,
-        "image": pixel_values,
-        "orig_size": orig_size,
-        "crop_coords": crop_coords,
-        "aesthetic_score": aes_score,
-    }
-    return batch
 
 
 def main():

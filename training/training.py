@@ -427,37 +427,32 @@ def main():
     is_adapter = config.experiment.get("is_adapter", False)
     is_lora = config.experiment.get("is_lora", False)
     is_text_encoder_lora = config.experiment.get("is_text_encoder_lora", False)
-    is_pre_encode = config.training.get("pre_encode", False)
-    if not is_pre_encode:
-        text_encoder_cls = (
-            CLIPTextModelWithProjection
-            if config.model.transformer.get("add_cond_embeds", False)
-            else CLIPTextModel
+
+    text_encoder_cls = (
+        CLIPTextModelWithProjection
+        if config.model.transformer.get("add_cond_embeds", False)
+        else CLIPTextModel
+    )
+    text_encoder = text_encoder_cls.from_pretrained(config.model.text_encoder.pretrained, projection_dim=768)
+    tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
+    if config.model.text_encoder.get("pad_token_id", None):
+        tokenizer.pad_token_id = config.model.text_encoder.pad_token_id
+
+    vq_class = get_vq_model_class(config.model.vq_model.type)
+    vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
+
+    if is_text_encoder_lora:
+        text_lora_config = LoraConfig(
+            r=config.training.get("lora_r", 8),
+            target_modules=["q_proj", "k_proj", "v_proj"],
+            lora_alpha=config.training.get("lora_alpha", 32),
         )
-        text_encoder = text_encoder_cls.from_pretrained(config.model.text_encoder.pretrained, projection_dim=768)
-        tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
-        if config.model.text_encoder.get("pad_token_id", None):
-            tokenizer.pad_token_id = config.model.text_encoder.pad_token_id
+        text_encoder = get_peft_model(text_encoder, text_lora_config)
 
-        vq_class = get_vq_model_class(config.model.vq_model.type)
-        vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
-
-        if is_text_encoder_lora:
-            text_lora_config = LoraConfig(
-                r=config.training.get("lora_r", 8),
-                target_modules=["q_proj", "k_proj", "v_proj"],
-                lora_alpha=config.training.get("lora_alpha", 32),
-            )
-            text_encoder = get_peft_model(text_encoder, text_lora_config)
-
-        # Freeze the text model and VQGAN
-        if not is_text_encoder_lora:
-            text_encoder.requires_grad_(False)
-        vq_model.requires_grad_(False)
-    else:
-        text_encoder = None
-        tokenizer = None
-        vq_model = None
+    # Freeze the text model and VQGAN
+    if not is_text_encoder_lora:
+        text_encoder.requires_grad_(False)
+    vq_model.requires_grad_(False)
 
     model_cls = MaskGitTransformer if config.model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
     if config.model.get("pretrained_model_path", None) is not None:
@@ -653,25 +648,20 @@ def main():
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
-    if not is_pre_encode:
-        if not is_text_encoder_lora:
-            text_encoder.to(device=accelerator.device, dtype=weight_dtype)
-        vq_model.to(device=accelerator.device)
+    if not is_text_encoder_lora:
+        text_encoder.to(device=accelerator.device, dtype=weight_dtype)
+    vq_model.to(device=accelerator.device)
     if config.training.get("use_ema", False):
         ema.to(accelerator.device)
 
-    if not is_pre_encode and config.model.transformer.get("use_empty_embeds_for_uncond", False):
-        with torch.no_grad():
-            empty_input = tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(accelerator.device)
-            outputs = text_encoder(empty_input, output_hidden_states=True)
-        if config.model.transformer.get("add_cond_embeds", False):
-            empty_embeds = outputs.hidden_states[-2]
-            empty_clip_embeds = outputs[0]
-        else:
-            empty_embeds = outputs.last_hidden_state
-            empty_clip_embeds = None
+    with torch.no_grad():
+        empty_input = tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(accelerator.device)
+        outputs = text_encoder(empty_input, output_hidden_states=True)
+    if config.model.transformer.get("add_cond_embeds", False):
+        empty_embeds = outputs.hidden_states[-2]
+        empty_clip_embeds = outputs[0]
     else:
-        empty_embeds = None
+        empty_embeds = outputs.last_hidden_state
         empty_clip_embeds = None
 
     if config.training.overfit_one_batch:
@@ -742,61 +732,53 @@ def main():
         batch: Any = None,
         is_train: bool = True,
     ):
-        if is_pre_encode:
-            image_tokens = pixel_values_or_image_ids
-            soft_targets = None
+        if config.training.use_soft_code_target and is_train:
+            soft_targets, image_tokens = vq_model.get_soft_code(
+                pixel_values_or_image_ids, temp=config.training.soft_code_temp, stochastic=config.training.use_stochastic_code
+            )
         else:
-            if config.training.use_soft_code_target and is_train:
-                soft_targets, image_tokens = vq_model.get_soft_code(
-                    pixel_values_or_image_ids, temp=config.training.soft_code_temp, stochastic=config.training.use_stochastic_code
+            soft_targets = None
+
+            if config.training.get("split_vae_encode", False):
+                split_batch_size = config.training.split_vae_encode
+                # Use a batch of at most split_vae_encode images to encode and then concat the results
+                batch_size = pixel_values_or_image_ids.shape[0]
+                num_splits = math.ceil(batch_size / split_batch_size)
+                image_tokens = []
+                for i in range(num_splits):
+                    start_idx = i * split_batch_size
+                    end_idx = min((i + 1) * split_batch_size, batch_size)
+                    image_tokens.append(vq_model.get_code(pixel_values_or_image_ids[start_idx:end_idx]))
+                image_tokens = torch.cat(image_tokens, dim=0)
+            else:
+                image_tokens = vq_model.get_code(pixel_values_or_image_ids)
+
+        if is_text_encoder_lora and is_train:
+            encoder_hidden_states = None
+            clip_embeds = None
+        elif config.model.transformer.get("add_cond_embeds", False):
+            outputs = text_encoder(text_input_ids_or_embeds, return_dict=True, output_hidden_states=True)
+            encoder_hidden_states = outputs.hidden_states[-2]
+            clip_embeds = outputs[0]
+        else:
+            encoder_hidden_states = text_encoder(text_input_ids_or_embeds)[0]
+            clip_embeds = None
+
+        if config.model.transformer.get("add_micro_cond_embeds", False):
+            original_sizes = list(map(list, zip(*batch["orig_size"])))
+            crop_coords = list(map(list, zip(*batch["crop_coords"])))
+            
+            if config.training.get("use_aesthetic_score", False):
+                aesthetic_scores = batch["aesthetic_score"]
+                micro_conds = torch.cat(
+                    [torch.tensor(original_sizes).cpu(), torch.tensor(crop_coords).cpu(), aesthetic_scores.unsqueeze(-1).cpu()], dim=-1
                 )
             else:
-                soft_targets = None
-
-                if config.training.get("split_vae_encode", False):
-                    split_batch_size = config.training.split_vae_encode
-                    # Use a batch of at most split_vae_encode images to encode and then concat the results
-                    batch_size = pixel_values_or_image_ids.shape[0]
-                    num_splits = math.ceil(batch_size / split_batch_size)
-                    image_tokens = []
-                    for i in range(num_splits):
-                        start_idx = i * split_batch_size
-                        end_idx = min((i + 1) * split_batch_size, batch_size)
-                        image_tokens.append(vq_model.get_code(pixel_values_or_image_ids[start_idx:end_idx]))
-                    image_tokens = torch.cat(image_tokens, dim=0)
-                else:
-                    image_tokens = vq_model.get_code(pixel_values_or_image_ids)
-
-        if not is_pre_encode:
-            if is_text_encoder_lora and is_train:
-                encoder_hidden_states = None
-                clip_embeds = None
-            elif config.model.transformer.get("add_cond_embeds", False):
-                outputs = text_encoder(text_input_ids_or_embeds, return_dict=True, output_hidden_states=True)
-                encoder_hidden_states = outputs.hidden_states[-2]
-                clip_embeds = outputs[0]
-            else:
-                encoder_hidden_states = text_encoder(text_input_ids_or_embeds)[0]
-                clip_embeds = None
-
-            if config.model.transformer.get("add_micro_cond_embeds", False):
-                original_sizes = list(map(list, zip(*batch["orig_size"])))
-                crop_coords = list(map(list, zip(*batch["crop_coords"])))
-                
-                if config.training.get("use_aesthetic_score", False):
-                    aesthetic_scores = batch["aesthetic_score"]
-                    micro_conds = torch.cat(
-                        [torch.tensor(original_sizes).cpu(), torch.tensor(crop_coords).cpu(), aesthetic_scores.unsqueeze(-1).cpu()], dim=-1
-                    )
-                else:
-                    micro_conds = torch.cat([torch.tensor(original_sizes), torch.tensor(crop_coords)], dim=-1)
-                
-                micro_conds = micro_conds.to(accelerator.device, non_blocking=True)
-            else:
-                micro_conds = None
+                micro_conds = torch.cat([torch.tensor(original_sizes), torch.tensor(crop_coords)], dim=-1)
+            
+            micro_conds = micro_conds.to(accelerator.device, non_blocking=True)
         else:
-            encoder_hidden_states = text_input_ids_or_embeds
-            clip_embeds = None
+            micro_conds = None
 
         # create MLM mask and labels
         input_ids, labels, loss_weight, mask_prob = mask_or_random_replace_tokens(
@@ -813,11 +795,7 @@ def main():
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         for batch in train_dataloader:
-            # TODO(Patrick) - We could definitely pre-compute the image tokens for faster training on larger datasets
-            if is_pre_encode:
-                pixel_values, input_ids = batch["image_input_ids"], batch["encoder_hidden_states"]
-            else:
-                pixel_values, input_ids = batch["image"], batch["input_ids"]
+            pixel_values, input_ids = batch["image"], batch["input_ids"]
 
             pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
             input_ids = input_ids.to(accelerator.device, non_blocking=True)
@@ -1092,21 +1070,6 @@ def generate_images(
     else:
         validation_prompts = imagenet_class_names
 
-    if config.training.get("pre_encode", False):
-        text_encoder = CLIPTextModel.from_pretrained(config.model.text_encoder.pretrained)
-        tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
-
-        vq_class = get_vq_model_class(config.model.vq_model.type)
-        vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
-
-        if accelerator.mixed_precision == "fp16":
-            weight_dtype = torch.float16
-        elif accelerator.mixed_precision == "bf16":
-            weight_dtype = torch.bfloat16
-
-        text_encoder.to(device=accelerator.device, dtype=weight_dtype)
-        vq_model.to(accelerator.device)
-
     input_ids = tokenizer(
         validation_prompts,
         return_tensors="pt",
@@ -1132,9 +1095,6 @@ def generate_images(
         else:
             micro_conds = torch.tensor([resolution, resolution, 0, 0], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype)
         micro_conds = micro_conds.unsqueeze(0).repeat(encoder_hidden_states.shape[0], 1)
-
-    if config.training.get("pre_encode", False):
-        del text_encoder
     
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
         # Generate images
@@ -1172,9 +1132,6 @@ def generate_images(
     
     model.train()
 
-    if config.training.get("pre_encode", False):
-        del vq_model
-
     # Convert to PIL images
     images = 2.0 * images - 1.0
     images = torch.clamp(images, -1.0, 1.0)
@@ -1201,8 +1158,6 @@ def generate_inpainting_images(
     empty_embeds=None,
     empty_clip_embeds=None,
 ):
-    assert not config.training.get("pre_encode", False)
-
     model.eval()
 
     mask_token_id = config.model.transformer.vocab_size - 1

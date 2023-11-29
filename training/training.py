@@ -114,135 +114,6 @@ def get_vq_model_class(model_type):
         raise ValueError(f"model_type {model_type} not supported for VQGAN")
 
 
-def soft_target_cross_entropy(logits, targets, soft_targets):
-    # ignore the first token from logits and targets (class id token)
-    logits = logits[:, 1:]
-    targets = targets[:, 1:]
-
-    logits = logits[..., : soft_targets.shape[-1]]
-
-    log_probs = F.log_softmax(logits, dim=-1)
-    padding_mask = targets.eq(-100)
-
-    loss = torch.sum(-soft_targets * log_probs, dim=-1)
-    loss.masked_fill_(padding_mask, 0.0)
-
-    # Take the mean over the label dimensions, then divide by the number of active elements (i.e. not-padded):
-    num_active_elements = padding_mask.numel() - padding_mask.long().sum()
-    loss = loss.sum() / num_active_elements
-    return loss
-
-
-def get_loss_weight(t, mask, min_val=0.3):
-    return 1 - (1 - mask) * ((1 - t) * (1 - min_val))[:, None]
-
-
-def mask_and_replace(image_tokens, timestep, mask_id, vocab_size, replace_factor=0.25):
-    batch_size, seq_len = image_tokens.shape
-
-    # calculate the probability of replacing each token with [MASK] and probability of replacing with random token
-    mask_prob = mask_schedule(timestep)
-    replace_prob = mask_prob * replace_factor
-    num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
-    num_token_replaced = (seq_len * replace_prob).round().clamp(min=0)
-
-    # Replace selected tokens with [MASK] token
-    batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
-    mask = batch_randperm < num_token_masked.unsqueeze(-1)
-    masked_tokens = torch.where(mask, mask_id, image_tokens)
-    
-    # Replace selected tokens with random token
-    replace = batch_randperm < num_token_replaced.unsqueeze(-1)
-    replaced_tokens = torch.randint_like(image_tokens, low=0, high=vocab_size, device=image_tokens.device)
-    masked_tokens = torch.where(replace, replaced_tokens, masked_tokens)
-
-    # Calculate the mask indicating changed tokens
-    return masked_tokens, mask
-
-
-def mask_or_random_replace_tokens(image_tokens, mask_id, config, is_train=True):
-    batch_size, seq_len = image_tokens.shape
-
-    if not is_train and config.training.get("eval_mask_ratios", None):
-        mask_prob = random.choices(config.training.eval_mask_ratios, k=batch_size)
-        mask_prob = torch.tensor(mask_prob, device=image_tokens.device)
-    else:
-        # Sample a random timestep for each image
-        timesteps = torch.rand(batch_size, device=image_tokens.device)
-        # Sample a random mask probability for each image using timestep and cosine schedule
-        mask_prob = mask_schedule(timesteps)
-        mask_prob = mask_prob.clip(config.training.min_masking_rate)
-
-    # creat a random mask for each image
-    num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
-
-    mask_contiguous_region_prob = config.training.get("mask_contiguous_region_prob", None)
-
-    if mask_contiguous_region_prob is None:
-        mask_contiguous_region = False
-    else:
-        mask_contiguous_region = random.random() < mask_contiguous_region_prob
-
-    if not mask_contiguous_region:
-        batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
-        mask = batch_randperm < num_token_masked.unsqueeze(-1)
-    else:
-        resolution = int(seq_len**0.5)
-        mask = torch.zeros((batch_size, resolution, resolution), device=image_tokens.device)
-
-        # TODO - would be nice to vectorize
-        for batch_idx, num_token_masked_ in enumerate(num_token_masked):
-            num_token_masked_ = int(num_token_masked_.item())
-
-            # NOTE: a bit handwavy with the bounds but gets a rectangle of ~num_token_masked_
-            num_token_masked_height = random.randint(
-                math.ceil(num_token_masked_ / resolution), min(resolution, num_token_masked_)
-            )
-            num_token_masked_height = min(num_token_masked_height, resolution)
-
-            num_token_masked_width = math.ceil(num_token_masked_ / num_token_masked_height)
-            num_token_masked_width = min(num_token_masked_width, resolution)
-
-            start_idx_height = random.randint(0, resolution - num_token_masked_height)
-            start_idx_width = random.randint(0, resolution - num_token_masked_width)
-
-            mask[
-                batch_idx,
-                start_idx_height : start_idx_height + num_token_masked_height,
-                start_idx_width : start_idx_width + num_token_masked_width,
-            ] = 1
-
-        mask = mask.reshape(batch_size, seq_len)
-        mask = mask.to(torch.bool)
-
-    # mask images and create input and labels
-    noise_type = config.training.get("noise_type", "mask")
-    if noise_type == "mask":
-        input_ids = torch.where(mask, mask_id, image_tokens)
-    elif noise_type == "random_replace":
-        # sample random tokens from the vocabulary
-        random_tokens = torch.randint_like(
-            image_tokens, low=0, high=config.model.codebook_size, device=image_tokens.device
-        )
-        input_ids = torch.where(mask, random_tokens, image_tokens)
-    elif noise_type == "mask_and_random_replace":
-        replace_factor = config.training.get("replace_factor", 0.25)
-        input_ids, mask = mask_and_replace(
-            image_tokens, timesteps, mask_id, config.model.transformer.codebook_size, replace_factor=replace_factor
-        )
-    else:
-        raise ValueError(f"noise_type {config.training.noise_type} not supported")
-
-    if (config.training.get("predict_all_tokens", False)):
-        labels = image_tokens
-        loss_weight = get_loss_weight(mask_prob, mask.long())
-    else:
-        labels = torch.where(mask, image_tokens, -100)
-        loss_weight = None
-
-    return input_ids, labels, loss_weight, mask_prob
-
-
 class AdapterDataset(Dataset):
     """
     A dataset to prepare the instance and class images with the prompts for fine-tuning the model.
@@ -674,12 +545,10 @@ def main():
                 input_ids,
                 encoder_hidden_states,
                 labels,
-                soft_targets,
                 mask_prob,
-                loss_weight,
                 cond_embeds,
                 micro_conds,
-            ) = prepare_inputs_and_labels(pixel_values, input_ids, config, vq_model, text_encoder, mask_id, batch=batch)
+            ) = prepare_inputs_and_labels(pixel_values, input_ids, config, vq_model, text_encoder, mask_id, batch)
 
             # log the inputs for the first step of the first epoch
             if global_step == 0 and epoch == 0:
@@ -706,22 +575,15 @@ def main():
                     empty_clip_embeds_ = empty_clip_embeds.expand(batch_size, -1)
                     cond_embeds = torch.where((cond_embeds * mask.squeeze(-1)).bool(), cond_embeds, empty_clip_embeds_)
 
-                if config.training.use_soft_code_target:
-                    logits = model(
-                        input_ids=input_ids,
-                        encoder_hidden_states=encoder_hidden_states,
-                    )
-                    loss = soft_target_cross_entropy(logits, labels, soft_targets)
-                else:
-                    logits, loss = model(
-                        input_ids=input_ids,
-                        encoder_hidden_states=encoder_hidden_states,
-                        labels=labels,
-                        label_smoothing=config.training.label_smoothing,
-                        cond_embeds=cond_embeds,
-                        loss_weight=loss_weight,
-                        micro_conds=micro_conds,
-                    )
+                logits, loss = model(
+                    input_ids=input_ids,
+                    encoder_hidden_states=encoder_hidden_states,
+                    labels=labels,
+                    label_smoothing=config.training.label_smoothing,
+                    cond_embeds=cond_embeds,
+                    loss_weight=None,
+                    micro_conds=micro_conds,
+                )
 
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
@@ -1093,11 +955,8 @@ def prepare_inputs_and_labels(
     vq_model,
     text_encoder,
     mask_id,
-    batch: Any = None,
-    is_train: bool = True,
+    batch,
 ):
-    soft_targets = None
-
     batch_size = pixel_values_or_image_ids.shape[0]
     split_batch_size = config.training.get("split_vae_encode", batch_size)
     # Use a batch of at most split_vae_encode images to encode and then concat the results
@@ -1111,7 +970,7 @@ def prepare_inputs_and_labels(
 
     outputs = text_encoder(text_input_ids_or_embeds, return_dict=True, output_hidden_states=True)
     encoder_hidden_states = outputs.hidden_states[-2]
-    clip_embeds = outputs[0]
+    cond_embeds = outputs[0]
 
     original_sizes = list(map(list, zip(*batch["orig_size"])))
     crop_coords = list(map(list, zip(*batch["crop_coords"])))
@@ -1121,16 +980,63 @@ def prepare_inputs_and_labels(
         [torch.tensor(original_sizes).cpu(), torch.tensor(crop_coords).cpu(), aesthetic_scores.unsqueeze(-1).cpu()], dim=-1
     )
     
-    micro_conds = micro_conds.to(clip_embeds.device, non_blocking=True)
+    micro_conds = micro_conds.to(cond_embeds.device, non_blocking=True)
 
-    # create MLM mask and labels
-    input_ids, labels, loss_weight, mask_prob = mask_or_random_replace_tokens(
-        image_tokens,
-        mask_id,
-        config,
-        is_train=is_train,
-    )
-    return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight, clip_embeds, micro_conds
+    batch_size, seq_len = image_tokens.shape
+
+    # Sample a random timestep for each image
+    timesteps = torch.rand(batch_size, device=image_tokens.device)
+    # Sample a random mask probability for each image using timestep and cosine schedule
+    mask_prob = mask_schedule(timesteps)
+    mask_prob = mask_prob.clip(config.training.min_masking_rate)
+
+    # creat a random mask for each image
+    num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
+
+    mask_contiguous_region_prob = config.training.get("mask_contiguous_region_prob", None)
+
+    if mask_contiguous_region_prob is None:
+        mask_contiguous_region = False
+    else:
+        mask_contiguous_region = random.random() < mask_contiguous_region_prob
+
+    if not mask_contiguous_region:
+        batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
+        mask = batch_randperm < num_token_masked.unsqueeze(-1)
+    else:
+        resolution = int(seq_len**0.5)
+        mask = torch.zeros((batch_size, resolution, resolution), device=image_tokens.device)
+
+        # TODO - would be nice to vectorize
+        for batch_idx, num_token_masked_ in enumerate(num_token_masked):
+            num_token_masked_ = int(num_token_masked_.item())
+
+            # NOTE: a bit handwavy with the bounds but gets a rectangle of ~num_token_masked_
+            num_token_masked_height = random.randint(
+                math.ceil(num_token_masked_ / resolution), min(resolution, num_token_masked_)
+            )
+            num_token_masked_height = min(num_token_masked_height, resolution)
+
+            num_token_masked_width = math.ceil(num_token_masked_ / num_token_masked_height)
+            num_token_masked_width = min(num_token_masked_width, resolution)
+
+            start_idx_height = random.randint(0, resolution - num_token_masked_height)
+            start_idx_width = random.randint(0, resolution - num_token_masked_width)
+
+            mask[
+                batch_idx,
+                start_idx_height : start_idx_height + num_token_masked_height,
+                start_idx_width : start_idx_width + num_token_masked_width,
+            ] = 1
+
+        mask = mask.reshape(batch_size, seq_len)
+        mask = mask.to(torch.bool)
+
+    # mask images and create input and labels
+    input_ids = torch.where(mask, mask_id, image_tokens)
+    labels = torch.where(mask, image_tokens, -100)
+
+    return input_ids, encoder_hidden_states, labels, mask_prob, cond_embeds, micro_conds
 
 
 if __name__ == "__main__":

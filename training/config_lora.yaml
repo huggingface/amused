@@ -122,8 +122,6 @@ training:
     guidance_scale: 8
     generation_timesteps: 16
     generation_temperature: 4.0
-    # related to vae code sampling
-    use_soft_code_target: False
     use_stochastic_code: False
     soft_code_temp: 1.0
     mask_contiguous_region_prob: 0.0

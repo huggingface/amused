@@ -1,9 +1,7 @@
 # amused
 
 ![collage](./assets/collage_small.png)
-<sup><sub>Images cherry-picked from 512 and 256 models</sub></sup>
-
-<sup><sub>Images are degraded to load faster. See ./assets/collage_full.png for originals</sub></sup>
+<sup><sub>Images cherry-picked from 512 and 256 models. Images are degraded to load faster. See ./assets/collage_full.png for originals</sub></sup>
 
 [[Paper]]()
 [[Models]]()

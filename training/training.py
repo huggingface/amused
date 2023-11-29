@@ -619,11 +619,6 @@ def main():
                 input_ids = torch.where(mask, mask_id, image_tokens)
                 labels = torch.where(mask, image_tokens, -100)
 
-            # log the inputs for the first step of the first epoch
-            if global_step == 0 and epoch == 0:
-                logger.info("Input ids: {}".format(input_ids))
-                logger.info("Labels: {}".format(labels))
-
             # Train Step
             with accelerator.accumulate(model):
                 if config.training.cond_dropout_prob > 0.0:

@@ -421,12 +421,7 @@ def main():
     is_lora = config.experiment.get("is_lora", False)
     is_text_encoder_lora = config.experiment.get("is_text_encoder_lora", False)
 
-    text_encoder_cls = (
-        CLIPTextModelWithProjection
-        if config.model.transformer.get("add_cond_embeds", False)
-        else CLIPTextModel
-    )
-    text_encoder = text_encoder_cls.from_pretrained(config.model.text_encoder.pretrained, projection_dim=768)
+    text_encoder = CLIPTextModelWithProjection.from_pretrained(config.model.text_encoder.pretrained, projection_dim=768)
     tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
     if config.model.text_encoder.get("pad_token_id", None):
         tokenizer.pad_token_id = config.model.text_encoder.pad_token_id
@@ -650,12 +645,8 @@ def main():
     with torch.no_grad():
         empty_input = tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(accelerator.device)
         outputs = text_encoder(empty_input, output_hidden_states=True)
-    if config.model.transformer.get("add_cond_embeds", False):
-        empty_embeds = outputs.hidden_states[-2]
-        empty_clip_embeds = outputs[0]
-    else:
-        empty_embeds = outputs.last_hidden_state
-        empty_clip_embeds = None
+    empty_embeds = outputs.hidden_states[-2]
+    empty_clip_embeds = outputs[0]
 
     if config.training.overfit_one_batch:
         train_dataloader = [next(iter(train_dataloader))]
@@ -749,13 +740,10 @@ def main():
         if is_text_encoder_lora and is_train:
             encoder_hidden_states = None
             clip_embeds = None
-        elif config.model.transformer.get("add_cond_embeds", False):
+        else:
             outputs = text_encoder(text_input_ids_or_embeds, return_dict=True, output_hidden_states=True)
             encoder_hidden_states = outputs.hidden_states[-2]
             clip_embeds = outputs[0]
-        else:
-            encoder_hidden_states = text_encoder(text_input_ids_or_embeds)[0]
-            clip_embeds = None
 
         if config.model.transformer.get("add_micro_cond_embeds", False):
             original_sizes = list(map(list, zip(*batch["orig_size"])))
@@ -813,14 +801,10 @@ def main():
             # Train Step
             with accelerator.accumulate(model):
                 if is_text_encoder_lora:
-                    if config.model.transformer.get("add_cond_embeds", False):
-                        inputs = batch["input_ids"].to(accelerator.device, non_blocking=True)
-                        outputs = text_encoder(inputs, return_dict=True, output_hidden_states=True)
-                        encoder_hidden_states = outputs.hidden_states[-2]
-                        cond_embeds = outputs[0]
-                    else:
-                        encoder_hidden_states = text_encoder(input_ids)[0]
-                        cond_embeds = None
+                    inputs = batch["input_ids"].to(accelerator.device, non_blocking=True)
+                    outputs = text_encoder(inputs, return_dict=True, output_hidden_states=True)
+                    encoder_hidden_states = outputs.hidden_states[-2]
+                    cond_embeds = outputs[0]
                 
                 if config.training.cond_dropout_prob > 0.0:
                     assert encoder_hidden_states is not None
@@ -1071,13 +1055,9 @@ def generate_images(
         max_length=config.dataset.preprocessing.max_seq_length,
     ).input_ids
 
-    if config.model.transformer.get("add_cond_embeds", False):
-        outputs = text_encoder(input_ids.to(accelerator.device), return_dict=True, output_hidden_states=True)
-        encoder_hidden_states = outputs.hidden_states[-2]
-        clip_embeds = outputs[0]
-    else:
-        encoder_hidden_states = text_encoder(input_ids.to(accelerator.device)).last_hidden_state
-        clip_embeds = None
+    outputs = text_encoder(input_ids.to(accelerator.device), return_dict=True, output_hidden_states=True)
+    encoder_hidden_states = outputs.hidden_states[-2]
+    clip_embeds = outputs[0]
 
     if config.model.transformer.get("add_micro_cond_embeds", False):
         resolution = config.dataset.preprocessing.resolution
@@ -1172,13 +1152,9 @@ def generate_inpainting_images(
         max_length=config.dataset.preprocessing.max_seq_length,
     ).input_ids
 
-    if config.model.transformer.get("add_cond_embeds", False):
-        outputs = text_encoder(token_input_ids.to(accelerator.device), return_dict=True, output_hidden_states=True)
-        encoder_hidden_states = outputs.hidden_states[-2]
-        clip_embeds = outputs[0]
-    else:
-        encoder_hidden_states = text_encoder(token_input_ids.to(accelerator.device)).last_hidden_state
-        clip_embeds = None
+    outputs = text_encoder(token_input_ids.to(accelerator.device), return_dict=True, output_hidden_states=True)
+    encoder_hidden_states = outputs.hidden_states[-2]
+    clip_embeds = outputs[0]
 
     if config.model.transformer.get("add_micro_cond_embeds", False):
         resolution = config.dataset.preprocessing.resolution

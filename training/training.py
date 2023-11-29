@@ -760,7 +760,7 @@ def main():
 
                 # Save model checkpoint
                 if (global_step + 1) % config.experiment.save_every == 0:
-                    save_checkpoint(model, text_encoder, config, accelerator, global_step + 1)
+                    save_checkpoint(model, config, accelerator, global_step + 1)
 
                 # Generate images
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
@@ -807,7 +807,7 @@ def main():
     accelerator.wait_for_everyone()
 
     # Evaluate and save checkpoint at the end of training
-    save_checkpoint(model, text_encoder, config, accelerator, global_step)
+    save_checkpoint(model, config, accelerator, global_step)
 
     # Save the final trained checkpoint
     if accelerator.is_main_process:
@@ -1042,7 +1042,7 @@ def validation_masks_to_latent_tensors(validation_masks):
     return torch.from_numpy(validation_masks_)
 
 
-def save_checkpoint(model, text_encoder, config, accelerator, global_step):
+def save_checkpoint(model, config, accelerator, global_step):
     output_dir = config.experiment.output_dir
     checkpoints_total_limit = config.experiment.get("checkpoints_total_limit", None)
 

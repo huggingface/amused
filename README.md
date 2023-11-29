@@ -1,6 +1,7 @@
 # amused
 
 ![collage](./assets/collage.png)
+<sup><sub>Images cherry-picked from 512 and 256 models</sub></sup>
 
 [[Paper]]()
 [[Models]]()
@@ -200,7 +201,7 @@ Amused inherits performance benefits from original [muse](https://arxiv.org/pdf/
 
 2. Fewer sampling steps: Compared to many diffusion models, muse requires fewer samples.
 
-Additionally, amused uses the smaller CLIP as its text encoder instead of T5 compared to muse. Amused is also smaller with ~600M params compared the largest 3B param muse model. Note though that amused being a smaller has lower quality.
+Additionally, amused uses the smaller CLIP as its text encoder instead of T5 compared to muse. Amused is also smaller with ~600M params compared the largest 3B param muse model. Note that being smaller, amused produces comparably lower quality results.
 
 ![a100_bs_1](./assets/a100_bs_1.png)
 ![a100_bs_8](./assets/a100_bs_8.png)
@@ -208,10 +209,46 @@ Additionally, amused uses the smaller CLIP as its text encoder instead of T5 com
 ![4090_bs_8](./assets/4090_bs_8.png)
 
 ### torch.compile
+Compiling the transformer offers significant speedups.
+
+|                     | Uncompiled Transformer (ms) | Compiled Transformer (ms) | Speed Up |
+|---------------------|-------------------------|----------------------|----------|
+| 256 Batch Size 1    |         507.7                |    212.1                  |   58%       |
+| 512 Batch Size 1    |        547                 |       249.9               |     54%     |
+| 256 Batch Size 8    |        628.6                 |        427.8              |    32%      |
+| 512 Batch Size 8    |         917.7                |       703.6               |    23%      |
+
+To use torch.compile, simply wrap the transformer in torch.compile i.e.
+
+```python
+pipe.transformer = torch.compile(pipe.transformer)
+```
+
+Full snippet:
+
+```python
+import torch
+from diffusers import AmusedPipeline
+
+pipe = AmusedPipeline.from_pretrained(
+    "openMUSE/diffusers-pipeline-256-finetuned", torch_dtype=torch.float16
+)  # TODO - fix path
+
+# HERE use torch.compile
+pipe.transformer = torch.compile(pipe.transformer)
+
+pipe.vqvae.to(torch.float32)  # TODO - vqvae is producing nans in fp16
+pipe = pipe.to("cuda")
+
+prompt = "cowboy"
+image = pipe(prompt, generator=torch.Generator('cuda').manual_seed(8)).images[0]
+image.save('text2image_256.png')
+```
 
 ### flash attention
 
 ### fused rms norm blocks
+
 
 ## 3. Training
 

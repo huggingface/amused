@@ -91,7 +91,6 @@ dataset:
 
 
 optimizer:
-    # name: fused_adamw
     name: adamw
     params: # default adamw params
         learning_rate: 0.0003

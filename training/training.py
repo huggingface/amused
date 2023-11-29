@@ -964,7 +964,6 @@ def main():
                         cond_embeds=cond_embeds,
                         loss_weight=loss_weight,
                         micro_conds=micro_conds,
-                        use_adapter=is_adapter,
                     )
 
                 # Gather the losses across all processes for logging (if we use distributed training).
@@ -1301,7 +1300,6 @@ def generate_images(
             noise_type=config.training.get("noise_type", "mask"),
             predict_all_tokens=config.training.get("predict_all_tokens", False),
             seq_len=config.model.transformer.num_vq_tokens,
-            use_adapter=config.experiment.get("is_adapter", False),
         )
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.

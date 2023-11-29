@@ -698,21 +698,18 @@ def main():
         encoder_hidden_states = outputs.hidden_states[-2]
         clip_embeds = outputs[0]
 
-        if config.model.transformer.get("add_micro_cond_embeds", False):
-            original_sizes = list(map(list, zip(*batch["orig_size"])))
-            crop_coords = list(map(list, zip(*batch["crop_coords"])))
-            
-            if config.training.get("use_aesthetic_score", False):
-                aesthetic_scores = batch["aesthetic_score"]
-                micro_conds = torch.cat(
-                    [torch.tensor(original_sizes).cpu(), torch.tensor(crop_coords).cpu(), aesthetic_scores.unsqueeze(-1).cpu()], dim=-1
-                )
-            else:
-                micro_conds = torch.cat([torch.tensor(original_sizes), torch.tensor(crop_coords)], dim=-1)
-            
-            micro_conds = micro_conds.to(accelerator.device, non_blocking=True)
+        original_sizes = list(map(list, zip(*batch["orig_size"])))
+        crop_coords = list(map(list, zip(*batch["crop_coords"])))
+        
+        if config.training.get("use_aesthetic_score", False):
+            aesthetic_scores = batch["aesthetic_score"]
+            micro_conds = torch.cat(
+                [torch.tensor(original_sizes).cpu(), torch.tensor(crop_coords).cpu(), aesthetic_scores.unsqueeze(-1).cpu()], dim=-1
+            )
         else:
-            micro_conds = None
+            micro_conds = torch.cat([torch.tensor(original_sizes), torch.tensor(crop_coords)], dim=-1)
+        
+        micro_conds = micro_conds.to(accelerator.device, non_blocking=True)
 
         # create MLM mask and labels
         input_ids, labels, loss_weight, mask_prob = mask_or_random_replace_tokens(
@@ -1002,15 +999,14 @@ def generate_images(
     encoder_hidden_states = outputs.hidden_states[-2]
     clip_embeds = outputs[0]
 
-    if config.model.transformer.get("add_micro_cond_embeds", False):
-        resolution = config.dataset.preprocessing.resolution
-        if config.training.get("use_aesthetic_score", False):
-            micro_conds = torch.tensor(
-                [resolution, resolution, 0, 0, 6], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype
-            )
-        else:
-            micro_conds = torch.tensor([resolution, resolution, 0, 0], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype)
-        micro_conds = micro_conds.unsqueeze(0).repeat(encoder_hidden_states.shape[0], 1)
+    resolution = config.dataset.preprocessing.resolution
+    if config.training.get("use_aesthetic_score", False):
+        micro_conds = torch.tensor(
+            [resolution, resolution, 0, 0, 6], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype
+        )
+    else:
+        micro_conds = torch.tensor([resolution, resolution, 0, 0], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype)
+    micro_conds = micro_conds.unsqueeze(0).repeat(encoder_hidden_states.shape[0], 1)
     
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
         # Generate images
@@ -1098,12 +1094,11 @@ def generate_inpainting_images(
     encoder_hidden_states = outputs.hidden_states[-2]
     clip_embeds = outputs[0]
 
-    if config.model.transformer.get("add_micro_cond_embeds", False):
-        resolution = config.dataset.preprocessing.resolution
-        micro_conds = torch.tensor(
-            [resolution, resolution, 0, 0, 6], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype
-        )
-        micro_conds = micro_conds.unsqueeze(0).repeat(encoder_hidden_states.shape[0], 1)
+    resolution = config.dataset.preprocessing.resolution
+    micro_conds = torch.tensor(
+        [resolution, resolution, 0, 0, 6], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype
+    )
+    micro_conds = micro_conds.unsqueeze(0).repeat(encoder_hidden_states.shape[0], 1)
 
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
         # Generate images

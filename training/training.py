@@ -554,11 +554,6 @@ def main():
     optimizer_type = config.optimizer.name
     if optimizer_type == "adamw":
         optimizer_cls = AdamW
-    elif optimizer_type == "fused_adamw":
-        if is_apex_available:
-            optimizer_cls = apex.optimizers.FusedAdam
-        else:
-            raise ImportError("Please install apex to use fused_adam")
     elif optimizer_type == "8bit_adamw":
         try:
             import bitsandbytes as bnb
@@ -926,10 +921,7 @@ def main():
                 optimizer.step()
                 lr_scheduler.step()
 
-                if optimizer_type == "fused_adamw":
-                    optimizer.zero_grad()
-                else:
-                    optimizer.zero_grad(set_to_none=True)
+                optimizer.zero_grad(set_to_none=True)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:

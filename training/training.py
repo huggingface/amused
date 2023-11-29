@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Any, List, Tuple, Union
 
 import numpy as np
-import plotly.express as px
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
@@ -40,7 +39,6 @@ from torch.utils.data import DataLoader, Dataset, default_collate
 from torchvision import transforms
 from peft import LoraConfig, get_peft_model
 from transformers import (
-    CLIPTextModel,
     CLIPTextModelWithProjection,
     CLIPTokenizer,
 )
@@ -609,9 +607,6 @@ def main():
         outputs = text_encoder(empty_input, output_hidden_states=True)
     empty_embeds = outputs.hidden_states[-2]
     empty_clip_embeds = outputs[0]
-
-    if config.training.overfit_one_batch:
-        train_dataloader = [next(iter(train_dataloader))]
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(train_dataloader.num_batches / config.training.gradient_accumulation_steps)

@@ -11,7 +11,6 @@ experiment:
     eval_every: 10000000 # never
     generate_every: 100
     log_every: 50
-    log_grad_norm_every: 500
     resume_from_checkpoint: False
     resume_lr_scheduler: True
     dont_resume_optimizer: True

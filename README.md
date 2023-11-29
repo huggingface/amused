@@ -79,8 +79,7 @@ image = pipe(prompt, input_image, strength=0.7, generator=torch.Generator('cuda'
 image.save('image2image_256.png')
 ```
 
-![image2image_256_orig](./assets/image2image_256_orig.png) 
-![image2image_256](./assets/image2image_256.png)
+![image2image_256_orig](./assets/image2image_256_orig.png) ![image2image_256](./assets/image2image_256.png)
 
 #### 512x512 model
 
@@ -108,8 +107,7 @@ image = pipe(prompt, input_image, generator=torch.Generator('cuda').manual_seed(
 image.save('image2image_512.png')
 ```
 
-![image2image_512_orig](./assets/image2image_512_orig.png) 
-![image2image_512](./assets/image2image_512.png)
+![image2image_512_orig](./assets/image2image_512_orig.png) ![image2image_512](./assets/image2image_512.png)
 
 ### Inpainting
 
@@ -149,9 +147,7 @@ for seed in range(20):
 
 ```
 
-![inpainting_256_orig](./assets/inpainting_256_orig.png) 
-![inpainting_256_mask](./assets/inpainting_256_mask.png) 
-![inpainting_256](./assets/inpainting_256.png)
+![inpainting_256_orig](./assets/inpainting_256_orig.png) ![inpainting_256_mask](./assets/inpainting_256_mask.png) ![inpainting_256](./assets/inpainting_256.png)
 
 #### 512x512 model
 

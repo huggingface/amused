@@ -20,7 +20,6 @@ import os
 import random
 import shutil
 import time
-from functools import partial
 from pathlib import Path
 from typing import Any, List, Tuple, Union
 
@@ -36,7 +35,7 @@ from accelerate.utils import DistributedType, set_seed
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from PIL import Image
 from PIL.ImageOps import exif_transpose
-from torch.optim import AdamW  # why is shampoo not available in PT :(
+from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset, default_collate
 from torchvision import transforms
 from peft import LoraConfig, get_peft_model
@@ -44,8 +43,6 @@ from transformers import (
     CLIPTextModel,
     CLIPTextModelWithProjection,
     CLIPTokenizer,
-    T5EncoderModel,
-    T5Tokenizer,
 )
 
 import muse
@@ -451,21 +448,15 @@ def main():
     is_text_encoder_lora = config.experiment.get("is_text_encoder_lora", False)
     is_pre_encode = config.training.get("pre_encode", False)
     if not is_pre_encode:
-        if config.model.text_encoder.type == "clip":
-            text_encoder_cls = (
-                CLIPTextModelWithProjection
-                if config.model.transformer.get("add_cond_embeds", False)
-                else CLIPTextModel
-            )
-            text_encoder = text_encoder_cls.from_pretrained(config.model.text_encoder.pretrained, projection_dim=768)
-            tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
-            if config.model.text_encoder.get("pad_token_id", None):
-                tokenizer.pad_token_id = config.model.text_encoder.pad_token_id
-        elif config.model.text_encoder.type == "t5":
-            text_encoder = T5EncoderModel.from_pretrained(config.model.text_encoder.pretrained)
-            tokenizer = T5Tokenizer.from_pretrained(config.model.text_encoder.pretrained)
-        else:
-            raise ValueError(f"Unknown text model type: {config.model.text_encoder.type}")
+        text_encoder_cls = (
+            CLIPTextModelWithProjection
+            if config.model.transformer.get("add_cond_embeds", False)
+            else CLIPTextModel
+        )
+        text_encoder = text_encoder_cls.from_pretrained(config.model.text_encoder.pretrained, projection_dim=768)
+        tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
+        if config.model.text_encoder.get("pad_token_id", None):
+            tokenizer.pad_token_id = config.model.text_encoder.pad_token_id
 
         vq_class = get_vq_model_class(config.model.vq_model.type)
         vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
@@ -1193,14 +1184,8 @@ def generate_images(
         validation_prompts = imagenet_class_names
 
     if config.training.get("pre_encode", False):
-        if config.model.text_encoder.type == "clip":
-            text_encoder = CLIPTextModel.from_pretrained(config.model.text_encoder.pretrained)
-            tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
-        elif config.model.text_encoder.type == "t5":
-            text_encoder = T5EncoderModel.from_pretrained(config.model.text_encoder.pretrained)
-            tokenizer = T5Tokenizer.from_pretrained(config.model.text_encoder.pretrained)
-        else:
-            raise ValueError(f"Unknown text model type: {config.model.text_encoder.type}")
+        text_encoder = CLIPTextModel.from_pretrained(config.model.text_encoder.pretrained)
+        tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
 
         vq_class = get_vq_model_class(config.model.vq_model.type)
         vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)

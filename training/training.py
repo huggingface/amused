@@ -443,7 +443,6 @@ def main():
         )
         model.load_state_dict(pretrained_model.state_dict(), strict=False)
     
-    if is_lora:
         lora_config = LoraConfig(
             r=config.training.get("lora_r", 8),
             target_modules=list(config.training.get("lora_target_modules", ["crossattention.query"])),

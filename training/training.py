@@ -59,13 +59,6 @@ from muse import (
 )
 from muse.lr_schedulers import get_scheduler
 
-try:
-    import apex
-
-    is_apex_available = True
-except ImportError:
-    is_apex_available = False
-
 logger = get_logger(__name__, log_level="INFO")
 
 

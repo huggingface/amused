@@ -33,7 +33,6 @@ import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import DistributedType, set_seed
-from data import ClassificationDataset, Text2ImageDataset
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from PIL import Image
 from PIL.ImageOps import exif_transpose
@@ -640,64 +639,25 @@ def main():
     preproc_config = config.dataset.preprocessing
     dataset_config = config.dataset.params
 
-    if config.dataset.type == "classification":
-        dataset_cls = partial(
-            ClassificationDataset,
-            return_text=True,
-            imagenet_class_mapping_path=dataset_config.imagenet_class_mapping_path,
-        )
-    else:
-        dataset_cls = Text2ImageDataset
-
-    if is_adapter or is_lora:
-        dataset = AdapterDataset(
-            instance_data_root=dataset_config.instance_data_root,
-            instance_prompt=dataset_config.instance_prompt,
-            tokenizer=tokenizer,
-            size=preproc_config.resolution,
-            center_crop=preproc_config.center_crop,
-            tokenizer_max_length=preproc_config.max_seq_length,
-        )
-        train_dataloader = DataLoader(
-            dataset,
-            batch_size=config.training.batch_size,
-            shuffle=True,
-            num_workers=dataset_config.num_workers,
-            pin_memory=dataset_config.pin_memory,
-            persistent_workers=dataset_config.persistent_workers,
-            collate_fn=default_collate,
-        )
-        eval_dataloader = None
-        train_dataloader.num_batches = len(train_dataloader)
-    else:
-        dataset = dataset_cls(
-            train_shards_path_or_url=dataset_config.train_shards_path_or_url,
-            eval_shards_path_or_url=dataset_config.eval_shards_path_or_url,
-            tokenizer=tokenizer,
-            max_seq_length=preproc_config.max_seq_length,
-            num_train_examples=config.experiment.max_train_examples,
-            per_gpu_batch_size=config.training.batch_size,
-            global_batch_size=total_batch_size_without_accum,
-            num_workers=dataset_config.num_workers,
-            resolution=preproc_config.resolution,
-            center_crop=preproc_config.center_crop,
-            random_flip=preproc_config.random_flip,
-            shuffle_buffer_size=dataset_config.shuffle_buffer_size,
-            pin_memory=dataset_config.pin_memory,
-            persistent_workers=dataset_config.persistent_workers,
-            is_pre_encoded=is_pre_encode,
-            vae_checkpoint=config.model.vq_model.pretrained,
-            text_encoder_checkpoint=config.model.text_encoder.pretrained,
-            use_filtered_dataset=dataset_config.get("use_filtered_dataset", False),
-            require_marked_as_ok_by_spawning=dataset_config.get("require_marked_as_ok_by_spawning", False),
-            require_marked_as_not_getty=dataset_config.get("require_marked_as_not_getty", False),
-            max_pnsfw=dataset_config.get("max_pnsfw", None),
-            max_pwatermark=dataset_config.get("max_pwatermark", 0.5),
-            min_aesthetic_score=dataset_config.get("min_aesthetic_score", 4.75),
-            min_size=dataset_config.get("min_size", 256),
-            is_sdxl_synthetic_dataset=dataset_config.get("is_sdxl_synthetic_dataset", False),
-        )
-        train_dataloader, eval_dataloader = dataset.train_dataloader, dataset.eval_dataloader
+    dataset = AdapterDataset(
+        instance_data_root=dataset_config.instance_data_root,
+        instance_prompt=dataset_config.instance_prompt,
+        tokenizer=tokenizer,
+        size=preproc_config.resolution,
+        center_crop=preproc_config.center_crop,
+        tokenizer_max_length=preproc_config.max_seq_length,
+    )
+    train_dataloader = DataLoader(
+        dataset,
+        batch_size=config.training.batch_size,
+        shuffle=True,
+        num_workers=dataset_config.num_workers,
+        pin_memory=dataset_config.pin_memory,
+        persistent_workers=dataset_config.persistent_workers,
+        collate_fn=default_collate,
+    )
+    eval_dataloader = None
+    train_dataloader.num_batches = len(train_dataloader)
 
     lr_scheduler = get_scheduler(
         config.lr_scheduler.scheduler,

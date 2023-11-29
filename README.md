@@ -7,6 +7,11 @@
 [[Colab]]()
 [[Training Code]]()
 
+| Model | Params |
+|-------|--------|
+| [amused-256](https://huggingface.co/openMUSE/diffusers-pipeline-256-finetuned) | 603M |
+| [amused-512](https://huggingface.co/openMUSE/diffusers-pipeline) | 608M |
+
 TODO - checkpoints
 
 TODO - why/where to use amused
@@ -189,9 +194,24 @@ image.save('inpainting_512.png')
 
 ## 2. Performance
 
+Amused inherits performance benefits from original [muse](https://arxiv.org/pdf/2301.00704.pdf). 
+
+1. Parallel decoding: The model follows a denoising schedule that aims to unmask some percent of tokens at each denoising step. At each step, all masked tokens are predicted, and some number of tokens that the network is most confident about are unmasked. Because multiple tokens are predicted at once, we can generate a full 256x256 or 512x512 image in around 12 steps. In comparison, an autoregressive model must predict a single token at a time. Note that a 256x256 image with the 16x downsampled VAE that muse uses will have 256 tokens.
+
+2. Fewer sampling steps: Compared to many diffusion models, muse requires fewer samples.
+
+Additionally, amused uses the smaller CLIP as its text encoder instead of T5 compared to muse. Amused is also smaller with ~600M params compared the largest 3B param muse model.
+
+![a100_bs_1](./assets/a100_bs_1.png)
+![a100_bs_8](./assets/a100_bs_8.png)
+![4090_bs_1](./assets/4090_bs_1.png)
+![4090_bs_8](./assets/4090_bs_8.png)
+
 ### torch.compile
 
 ### flash attention
+
+### fused rms norm blocks
 
 ## 3. Training
 

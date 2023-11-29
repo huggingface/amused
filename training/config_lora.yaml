@@ -1,5 +1,5 @@
 wandb:
-  entity: psuraj
+  entity: williamberman
 
 experiment:
     project: "muse"
@@ -75,9 +75,9 @@ model:
 dataset:
     type: "text2image"
     params:
-        instance_data_root: "/admin/home/suraj/code/muse-training/styledrop_images/cat_toy"
+        instance_data_root: "/fsx/william/cat_toy"
         instance_prompt: "A photo of sks toy"
-        validation_prompts_file: "/admin/home/suraj/code/muse-training/configs/dreambooth_prompts.txt"
+        validation_prompts_file: "/fsx/william/dreambooth_prompts.txt"
         batch_size: ${training.batch_size}
         num_workers: 1
         resolution: 512
@@ -91,7 +91,8 @@ dataset:
 
 
 optimizer:
-    name: fused_adamw
+    # name: fused_adamw
+    name: adamw
     params: # default adamw params
         learning_rate: 0.0003
         scale_lr: False # scale learning rate by total batch size

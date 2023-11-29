@@ -5,27 +5,26 @@
 #SBATCH --cpus-per-task=24
 #SBATCH --gres=gpu:1
 #SBATCH --partition=production-cluster
-#SBATCH --output=/admin/home/suraj/logs/maskgit-imagenet/%x-%j.out
+#SBATCH --output=/fsx/william/logs/styledrop.out
 
 set -x -e
 
-source /admin/home/suraj/.bashrc
-source /fsx/suraj/miniconda3/etc/profile.d/conda.sh
-conda activate muse
+source /fsx/william/miniconda3/etc/profile.d/conda.sh
+conda activate base
 
 echo "START TIME: $(date)"
 
-MUSE_REPO=/admin/home/suraj/code/muse
-OUTPUT_DIR=/fsx/suraj/styledrop-lora-dreambooth-2
+MUSE_REPO=/fsx/william/open-muse.2
+OUTPUT_DIR=/fsx/william/styledrop-lora-dreambooth-2
 LOG_PATH=$OUTPUT_DIR/main_log.txt
-CONFIG_PATH=/admin/home/suraj/code/muse-training/configs/config_lora.yaml
+CONFIG_PATH=/fsx/william/amused/training/config_lora.yaml
 
 mkdir -p $OUTPUT_DIR
 touch $LOG_PATH
 pushd $MUSE_REPO
 
 CMD=" \
-    /admin/home/suraj/code/muse-training/scripts/train_muse.py config=$CONFIG_PATH \
+    /fsx/william/amused/training/training.py config=$CONFIG_PATH \
     experiment.name=$(basename $OUTPUT_DIR) \
     experiment.output_dir=$OUTPUT_DIR \
     "

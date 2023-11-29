@@ -1,6 +1,6 @@
 # amused
 
-![collage](https://huggingface.co/datasets/williamberman/misc/resolve/main/collage.png)
+![collage](./assets/collage.png)
 
 [[Paper]]()
 [[Models]]()

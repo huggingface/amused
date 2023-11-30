@@ -139,6 +139,14 @@ def parse_args():
         "--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes."
     )
     parser.add_argument(
+        "--dataloader_num_workers",
+        type=int,
+        default=0,
+        help=(
+            "Number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process."
+        ),
+    )
+    parser.add_argument(
         "--allow_tf32",
         action="store_true",
         help=(
@@ -427,8 +435,6 @@ def main(args):
         args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
     )
 
-    dataset_config = config.dataset.params
-
     dataset = AdapterDataset(
         instance_data_root=args.instance_data_dir,
         size=args.resolution,
@@ -439,9 +445,7 @@ def main(args):
         dataset,
         batch_size=args.train_batch_size,
         shuffle=True,
-        num_workers=dataset_config.num_workers,
-        pin_memory=dataset_config.pin_memory,
-        persistent_workers=dataset_config.persistent_workers,
+        num_workers=args.dataloader_num_workers,
         collate_fn=default_collate,
     )
     train_dataloader.num_batches = len(train_dataloader)

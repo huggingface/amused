@@ -40,13 +40,11 @@ from transformers import (
     CLIPTextModelWithProjection,
     CLIPTokenizer,
 )
-from diffusers import VQModel
+from diffusers import VQModel, EMAModel
 
 import muse
 import muse.training_utils
 from muse import (
-    EMAModel,
-    MaskGitTransformer,
     MaskGiTUViT,
 )
 from muse.lr_schedulers import get_scheduler
@@ -254,18 +252,12 @@ def main():
     text_encoder.requires_grad_(False)
     vq_model.requires_grad_(False)
 
-    model_cls = MaskGitTransformer if config.model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
     if config.model.get("pretrained_model_path", None) is not None:
-        model = model_cls.from_pretrained(config.model.pretrained_model_path)
+        model = MaskGiTUViT.from_pretrained(config.model.pretrained_model_path)
     else:
-        model = model_cls(**config.model.transformer)
+        model = MaskGiTUViT(**config.model.transformer)
     
     if is_lora:
-        pretrained_model = MaskGiTUViT.from_pretrained(
-            "valhalla/research-run-finetuned-journeydb", subfolder="ema_model", revision="06bcd6ab6580a2ed3275ddfc17f463b8574457da"
-        )
-        model.load_state_dict(pretrained_model.state_dict(), strict=False)
-    
         lora_config = LoraConfig(
             r=config.training.get("lora_r", 8),
             target_modules=list(config.training.get("lora_target_modules", ["crossattention.query"])),
@@ -282,8 +274,7 @@ def main():
             model.parameters(),
             decay=config.training.ema_decay,
             update_after_step=config.training.ema_update_after_step,
-            update_every=config.training.ema_update_every,
-            model_cls=model_cls,
+            model_cls=MaskGiTUViT,
             model_config=model.config,
         )
 
@@ -296,7 +287,7 @@ def main():
                     continue
                 elif isinstance(model, type(accelerator.unwrap_model(EMAModel))):
                     indices_to_pop.append(idx)
-                    load_model = EMAModel.from_pretrained(os.path.join(input_dir, "ema_model"), model_cls=model_cls)
+                    load_model = EMAModel.from_pretrained(os.path.join(input_dir, "ema_model"), model_cls=MaskGiTUViT)
                     ema.load_state_dict(load_model.state_dict())
                     ema.to(accelerator.device)
                     del load_model
@@ -777,8 +768,6 @@ def generate_images(
     for i in range(num_splits):
         start_idx = i * split_batch_size
         end_idx = min((i + 1) * split_batch_size, batch_size)
-        # TODO - HERE decode
-        images.append(vq_model.decode_code(gen_token_ids[start_idx:end_idx]))
         vae_scale_factor = 2 ** (len(vq_model.config.block_out_channels) - 1)
         images.append(
             vq_model.decode(

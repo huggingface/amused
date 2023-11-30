@@ -145,6 +145,9 @@ def parse_args():
             " https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices"
         ),
     )
+    parser.add_argument("--use_ema", action="store_true", help="Whether to use EMA model.")
+    parser.add_argument("--ema_decay", type=float, default=0.9999)
+    parser.add_argument("--ema_update_after_step", type=int, default=0)
     parser.add_argument(
         "--output_dir",
         type=str,
@@ -293,15 +296,14 @@ def main(args):
     
     mask_id = model_config.vocab_size - 1
 
-    # Create EMA
-    if config.training.get("use_ema", False):
+    if args.use_ema:
         if resume_from_checkpoint is not None:
             ema = EMAModel.from_pretrained(os.path.join(resume_from_checkpoint, "ema_model"), model_cls=UVit2DModel)
         else:
             ema = EMAModel(
                 model.parameters(),
-                decay=config.training.ema_decay,
-                update_after_step=config.training.ema_update_after_step,
+                decay=args.ema_decay,
+                update_after_step=args.ema_update_after_step,
                 model_cls=UVit2DModel,
                 model_config=model_config,
             )
@@ -312,7 +314,7 @@ def main(args):
             models[0].save_pretrained(os.path.join(output_dir, "transformer"))
             weights.pop()
 
-            if config.training.get("use_ema", False):
+            if args.use_ema:
                 ema.save_pretrained(os.path.join(output_dir, "ema_model"))
 
     def load_model_hook(models, input_dir):
@@ -427,7 +429,7 @@ def main(args):
 
     text_encoder.to(device=accelerator.device, dtype=weight_dtype)
     vq_model.to(device=accelerator.device)
-    if config.training.get("use_ema", False):
+    if args.use_ema:
         ema.to(accelerator.device)
 
     with torch.no_grad():
@@ -565,7 +567,7 @@ def main(args):
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
-                if config.training.get("use_ema", False):
+                if args.use_ema:
                     ema.step(model.parameters())
 
                 if (global_step + 1) % config.experiment.log_every == 0:
@@ -586,7 +588,7 @@ def main(args):
                     save_checkpoint(args, config, accelerator, global_step + 1)
 
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
-                    if config.training.get("use_ema", False):
+                    if args.use_ema:
                         ema.store(model.parameters())
                         ema.copy_to(model.parameters())
 
@@ -610,7 +612,7 @@ def main(args):
 
                         model.train()
 
-                    if config.training.get("use_ema", False):
+                    if args.use_ema:
                         ema.restore(model.parameters())
 
                 global_step += 1
@@ -628,7 +630,7 @@ def main(args):
     # Save the final trained checkpoint
     if accelerator.is_main_process:
         model = accelerator.unwrap_model(model)
-        if config.training.get("use_ema", False):
+        if args.use_ema:
             ema.copy_to(model.parameters())
         model.save_pretrained(args.output_dir)
 

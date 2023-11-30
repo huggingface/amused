@@ -47,10 +47,6 @@ lr_scheduler:
 training:
     batch_size: 6
     enable_tf32: True
-    use_ema: False
-    ema_decay: 0.9999
-    ema_update_after_step: 0
-    ema_update_every: 1
     max_train_steps: 2000
     cond_dropout_prob: 0.0
     min_masking_rate: 0.0

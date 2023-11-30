@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 import logging
 import math
 import os
@@ -32,7 +31,7 @@ from PIL.ImageOps import exif_transpose
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset, default_collate
 from torchvision import transforms
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, get_peft_model, PeftModel
 from transformers import (
     CLIPTextModelWithProjection,
     CLIPTokenizer,
@@ -219,6 +218,24 @@ def main():
     if config.training.seed is not None:
         set_seed(config.training.seed)
 
+    # Potentially load in the weights and states from a previous save
+    resume_from_checkpoint = config.experiment.resume_from_checkpoint
+    if resume_from_checkpoint:
+        if resume_from_checkpoint == "latest":
+            # Get the most recent checkpoint
+            dirs = os.listdir(config.experiment.output_dir)
+            dirs = [d for d in dirs if d.startswith("checkpoint")]
+            dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
+            if len(dirs) > 0:
+                resume_from_checkpoint = os.path.join(config.experiment.output_dir, dirs[-1])
+            else:
+                resume_from_checkpoint = None
+
+        if resume_from_checkpoint is None:
+            accelerator.print(f"Checkpoint '{config.experiment.resume_from_checkpoint}' does not exist. Starting a new training run.")
+        else:
+            accelerator.print(f"Resuming from checkpoint {resume_from_checkpoint}")
+
     #########################
     # MODELS and OPTIMIZER  #
     #########################
@@ -237,57 +254,65 @@ def main():
     text_encoder.requires_grad_(False)
     vq_model.requires_grad_(False)
 
-    if config.model.get("pretrained_model_path", None) is not None:
-        subfolder = config.model.get("pretrained_model_path_subfolder", None)
-        model = UVit2DModel.from_pretrained(config.model.pretrained_model_path, subfolder=subfolder)
+    if is_lora:
+        if config.model.get("pretrained_model_path", None) is not None:
+            subfolder = config.model.get("pretrained_model_path_subfolder", None)
+            model = UVit2DModel.from_pretrained(config.model.pretrained_model_path, subfolder=subfolder)
+        else:
+            model = UVit2DModel(**config.model.transformer)
+    
+        if resume_from_checkpoint is not None:
+            model = PeftModel.from_pretrained(model, os.path.join(resume_from_checkpoint, "transformer"), is_trainable=True)
+        else:
+            lora_config = LoraConfig(
+                r=16,
+                lora_alpha=32,
+                target_modules=['to_q', 'to_k', 'to_v'],
+            )
+            model = get_peft_model(model, lora_config)
     else:
-        model = UVit2DModel(**config.model.transformer)
+        if resume_from_checkpoint is not None:
+            model = UVit2DModel.from_pretrained(resume_from_checkpoint, subfolder="transformer")
+        elif config.model.get("pretrained_model_path", None) is not None:
+            subfolder = config.model.get("pretrained_model_path_subfolder", None)
+            model = UVit2DModel.from_pretrained(config.model.pretrained_model_path, subfolder=subfolder)
+        else:
+            model = UVit2DModel(**config.model.transformer)
 
     model_config = model.config
-    
-    if is_lora:
-        lora_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            target_modules=['to_q', 'to_k', 'to_v'],
-        )
-        model = get_peft_model(model, lora_config)
     
     mask_id = model_config.vocab_size - 1
 
     # Create EMA
     if config.training.get("use_ema", False):
-        ema = EMAModel(
-            model.parameters(),
-            decay=config.training.ema_decay,
-            update_after_step=config.training.ema_update_after_step,
-            model_cls=UVit2DModel,
-            model_config=model_config,
-        )
+        if resume_from_checkpoint is not None:
+            ema = EMAModel.from_pretrained(os.path.join(resume_from_checkpoint, "ema_model"), model_cls=UVit2DModel)
+        else:
+            ema = EMAModel(
+                model.parameters(),
+                decay=config.training.ema_decay,
+                update_after_step=config.training.ema_update_after_step,
+                model_cls=UVit2DModel,
+                model_config=model_config,
+            )
 
-        # Create custom saving and loading hooks so that `accelerator.save_state(...)` serializes in a nice format.
-        def load_model_hook(models, input_dir):
-            indices_to_pop = []
-            for idx, model in enumerate(models):
-                if isinstance(model, type(accelerator.unwrap_model(text_encoder))):
-                    indices_to_pop.append(idx)
-                    continue
-                elif isinstance(model, type(accelerator.unwrap_model(EMAModel))):
-                    indices_to_pop.append(idx)
-                    load_model = EMAModel.from_pretrained(os.path.join(input_dir, "ema_model"), model_cls=UVit2DModel)
-                    ema.load_state_dict(load_model.state_dict())
-                    ema.to(accelerator.device)
-                    del load_model
-            
-            for idx in indices_to_pop:
-                models.pop(idx)
+    def save_model_hook(models, weights, output_dir):
+        if accelerator.is_main_process:
+            assert len(models) == 1
+            models[0].save_pretrained(os.path.join(output_dir, "transformer"))
+            weights.pop()
 
-        def save_model_hook(models, weights, output_dir):
-            if accelerator.is_main_process:
+            if config.training.get("use_ema", False):
                 ema.save_pretrained(os.path.join(output_dir, "ema_model"))
 
-        accelerator.register_load_state_pre_hook(load_model_hook)
-        accelerator.register_save_state_pre_hook(save_model_hook)
+    def load_model_hook(models, input_dir):
+        # All models are initially instantiated from the checkpoint and so
+        # don't have to be loaded in the accelerate hook
+        assert len(models) == 1
+        models.pop()
+
+    accelerator.register_load_state_pre_hook(load_model_hook)
+    accelerator.register_save_state_pre_hook(save_model_hook)
 
     optimizer_config = config.optimizer.params
     learning_rate = optimizer_config.learning_rate
@@ -378,12 +403,8 @@ def main():
 
     # Prepare everything with accelerator
     logger.info("Preparing model, optimizer and dataloaders")
-    if is_lora:
-        model, optimizer, lr_scheduler, train_dataloader = accelerator.prepare(model, optimizer, lr_scheduler, train_dataloader)
-        train_dataloader.num_batches = len(train_dataloader)
-    else:
-        # The dataloader are already aware of distributed training, so we don't need to prepare them.
-        model, optimizer, lr_scheduler = accelerator.prepare(model, optimizer, lr_scheduler)
+    model, optimizer, lr_scheduler, train_dataloader = accelerator.prepare(model, optimizer, lr_scheduler, train_dataloader)
+    train_dataloader.num_batches = len(train_dataloader)
 
     # For mixed precision training we cast the text_encoder and vae weights to half-precision
     # as these models are only used for inference, keeping weights in full precision is not required.
@@ -418,49 +439,14 @@ def main():
     logger.info(f"  Instantaneous batch size per device = { config.training.batch_size}")
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {config.training.gradient_accumulation_steps}")
-    global_step = 0
-    first_epoch = 0
 
-    # Potentially load in the weights and states from a previous save
-    resume_from_checkpoint = config.experiment.resume_from_checkpoint
-    if resume_from_checkpoint:
-        if resume_from_checkpoint != "latest":
-            path = resume_from_checkpoint
-        else:
-            # Get the most recent checkpoint
-            dirs = os.listdir(config.experiment.output_dir)
-            dirs = [d for d in dirs if d.startswith("checkpoint")]
-            dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
-            path = dirs[-1] if len(dirs) > 0 else None
-            if path is not None:
-                path = os.path.join(config.experiment.output_dir, path)
-
-        if path is None:
-            accelerator.print(f"Checkpoint '{resume_from_checkpoint}' does not exist. Starting a new training run.")
-            resume_from_checkpoint = None
-        else:
-            accelerator.print(f"Resuming from checkpoint {path}")
-
-            resume_lr_scheduler = config.experiment.get("resume_lr_scheduler", True)
-            dont_resume_optimizer = config.experiment.get("dont_resume_optimizer", False)
-            if not resume_lr_scheduler:
-                logger.info("Not resuming the lr scheduler.")
-                accelerator._schedulers = []  # very hacky, but we don't want to resume the lr scheduler
-            if dont_resume_optimizer:
-                logger.info("Not resuming the optimizer.")
-                accelerator._optimizers = []  # very hacky, but we don't want to resume the optimizer
-                grad_scaler = accelerator.scaler
-                accelerator.scaler = None
-
-            accelerator.load_state(path)
-            if not resume_lr_scheduler:
-                accelerator._schedulers = [lr_scheduler]
-            if dont_resume_optimizer:
-                accelerator._optimizers = [optimizer]
-                accelerator.scaler = grad_scaler
-
-            global_step = int(os.path.basename(path).split("-")[1])
-            first_epoch = global_step // num_update_steps_per_epoch
+    if resume_from_checkpoint is None:
+        global_step = 0
+        first_epoch = 0
+    else:
+        accelerator.load_state(resume_from_checkpoint)
+        global_step = int(os.path.basename(resume_from_checkpoint).split("-")[1])
+        first_epoch = global_step // num_update_steps_per_epoch
 
     # As stated above, we are not doing epoch based training here, but just using this for book keeping and being able to
     # reuse the same training loop with other datasets/loaders.
@@ -588,7 +574,7 @@ def main():
 
 
                 if (global_step + 1) % config.experiment.save_every == 0:
-                    save_checkpoint(model, config, accelerator, global_step + 1)
+                    save_checkpoint(config, accelerator, global_step + 1)
 
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
                     if config.training.get("use_ema", False):
@@ -628,7 +614,7 @@ def main():
     accelerator.wait_for_everyone()
 
     # Evaluate and save checkpoint at the end of training
-    save_checkpoint(model, config, accelerator, global_step)
+    save_checkpoint(config, accelerator, global_step)
 
     # Save the final trained checkpoint
     if accelerator.is_main_process:
@@ -640,7 +626,7 @@ def main():
     accelerator.end_training()
 
 
-def save_checkpoint(model, config, accelerator, global_step):
+def save_checkpoint(config, accelerator, global_step):
     output_dir = config.experiment.output_dir
     checkpoints_total_limit = config.experiment.get("checkpoints_total_limit", None)
 
@@ -665,21 +651,6 @@ def save_checkpoint(model, config, accelerator, global_step):
                 shutil.rmtree(removing_checkpoint)
 
     save_path = Path(output_dir) / f"checkpoint-{global_step}"
-
-    # retrieve the model on all processes for deepspeed stage 3 to work then save on one process (we are not using stage 3 yet)
-    # XXX: could also make this conditional on deepspeed
-    state_dict = accelerator.get_state_dict(model)
-
-    if accelerator.is_main_process:
-        unwrapped_model = accelerator.unwrap_model(model)
-        unwrapped_model.save_pretrained(
-            save_path / "unwrapped_model",
-            save_function=accelerator.save,
-            state_dict=state_dict,
-        )
-        json.dump({"global_step": global_step}, (save_path / "metadata.json").open("w+"))
-        logger.info(f"Saved state to {save_path}")
-
     accelerator.save_state(save_path)
     logger.info(f"Saved state to {save_path}")
 

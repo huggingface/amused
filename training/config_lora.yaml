@@ -10,9 +10,7 @@ experiment:
     save_every: 100
     generate_every: 100
     log_every: 50
-    resume_from_checkpoint: False
-    resume_lr_scheduler: True
-    dont_resume_optimizer: True
+    resume_from_checkpoint: latest
     checkpoints_total_limit: 20
     is_lora: True
 

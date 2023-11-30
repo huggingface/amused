@@ -516,45 +516,8 @@ def main():
 
                 # creat a random mask for each image
                 num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
-
-                mask_contiguous_region_prob = config.training.get("mask_contiguous_region_prob", None)
-
-                if mask_contiguous_region_prob is None:
-                    mask_contiguous_region = False
-                else:
-                    mask_contiguous_region = random.random() < mask_contiguous_region_prob
-
-                if not mask_contiguous_region:
-                    batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
-                    mask = batch_randperm < num_token_masked.unsqueeze(-1)
-                else:
-                    resolution = int(seq_len**0.5)
-                    mask = torch.zeros((batch_size, resolution, resolution), device=image_tokens.device)
-
-                    # TODO - would be nice to vectorize
-                    for batch_idx, num_token_masked_ in enumerate(num_token_masked):
-                        num_token_masked_ = int(num_token_masked_.item())
-
-                        # NOTE: a bit handwavy with the bounds but gets a rectangle of ~num_token_masked_
-                        num_token_masked_height = random.randint(
-                            math.ceil(num_token_masked_ / resolution), min(resolution, num_token_masked_)
-                        )
-                        num_token_masked_height = min(num_token_masked_height, resolution)
-
-                        num_token_masked_width = math.ceil(num_token_masked_ / num_token_masked_height)
-                        num_token_masked_width = min(num_token_masked_width, resolution)
-
-                        start_idx_height = random.randint(0, resolution - num_token_masked_height)
-                        start_idx_width = random.randint(0, resolution - num_token_masked_width)
-
-                        mask[
-                            batch_idx,
-                            start_idx_height : start_idx_height + num_token_masked_height,
-                            start_idx_width : start_idx_width + num_token_masked_width,
-                        ] = 1
-
-                    mask = mask.reshape(batch_size, seq_len)
-                    mask = mask.to(torch.bool)
+                batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
+                mask = batch_randperm < num_token_masked.unsqueeze(-1)
 
                 # mask images and create input and labels
                 input_ids = torch.where(mask, mask_id, image_tokens)
@@ -619,7 +582,6 @@ def main():
                 if config.training.get("use_ema", False):
                     ema.step(model.parameters())
 
-                # Log metrics
                 if (global_step + 1) % config.experiment.log_every == 0:
                     logs = {
                         "step_loss": avg_loss.item(),
@@ -635,13 +597,10 @@ def main():
                     )
 
 
-                # Save model checkpoint
                 if (global_step + 1) % config.experiment.save_every == 0:
                     save_checkpoint(model, config, accelerator, global_step + 1)
 
-                # Generate images
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
-                    # Store the model parameters temporarily and load the EMA parameters to perform inference.
                     if config.training.get("use_ema", False):
                         ema.store(model.parameters())
                         ema.copy_to(model.parameters())
@@ -667,7 +626,6 @@ def main():
                         model.train()
 
                     if config.training.get("use_ema", False):
-                        # Switch back to the original model parameters for training.
                         ema.restore(model.parameters())
 
                 global_step += 1

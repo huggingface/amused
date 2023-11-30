@@ -13,7 +13,6 @@ dataset:
     params:
         instance_data_root: "/fsx/william/cat_toy"
         instance_prompt: "A photo of sks toy"
-        validation_prompts_file: "/fsx/william/dreambooth_prompts.txt"
         batch_size: ${training.batch_size}
         num_workers: 1
         resolution: 512

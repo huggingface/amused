@@ -234,6 +234,7 @@ def parse_args():
         ),
     )
     parser.add_argument("--is_lora", action="store_true", help="TODO")
+    parser.add_argument("--validation_prompts", type=str, nargs="*")
 
     args = parser.parse_args()
 
@@ -620,20 +621,17 @@ def main(args):
 
                     with torch.no_grad():
                         logger.info("Generating images...")
+
                         model.eval()
 
-                        # TODO load properly
-                        scheduler = AmusedScheduler.from_pretrained("openMUSE/diffusers-pipeline", subfolder="scheduler")
+                        scheduler = AmusedScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", revision=args.revision, variant=args.variant)
 
                         pipe = AmusedPipeline(transformer=accelerator.unwrap_model(model), tokenizer=tokenizer, text_encoder=text_encoder, vqvae=vq_model, scheduler=scheduler)
                         pipe.set_progress_bar_config(disable=True)
 
-                        with open(config.dataset.params.validation_prompts_file, "r") as f:
-                            validation_prompts = f.read().splitlines()
+                        pil_images = pipe(prompt=args.validation_prompts).images
+                        wandb_images = [wandb.Image(image, caption=args.validation_prompts[i]) for i, image in enumerate(pil_images)]
 
-                        pil_images = pipe(prompt=validation_prompts).images
-
-                        wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
                         wandb.log({"generated_images": wandb_images}, step=global_step+1)
 
                         model.train()

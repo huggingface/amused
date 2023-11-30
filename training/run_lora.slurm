@@ -36,7 +36,16 @@ CMD=" \
         --lr_scheduler constant_with_warmup \
         --lr_warmup_steps 2000 \
         --learning_rate 0.0003 \
-        --allow_tf32
+        --allow_tf32 \
+        --validation_prompts \
+            'a photo sks getting a haircut' \
+            'a photo sks on mount fuji' \
+            'a photo sks on a skateboard' \
+            'a photo sks on a swing' \
+            'a photo sks on a table' \
+            'a photo sks sleeping' \
+            'a photo of sks backpack' \
+            'a photo of sks riding a bike'
     "
 
 GPUS_PER_NODE=1

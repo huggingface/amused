@@ -17,14 +17,11 @@ import json
 import logging
 import math
 import os
-import random
 import shutil
 from pathlib import Path
 from typing import Any, List, Tuple
 
-import numpy as np
 import torch
-import torchvision.transforms.functional as TF
 import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
@@ -41,14 +38,10 @@ from transformers import (
     CLIPTokenizer,
 )
 from diffusers import VQModel, EMAModel, UVit2DModel, AmusedPipeline, AmusedScheduler
+import diffusers.optimization
 import torch.nn.functional as F
 
-from muse.lr_schedulers import get_scheduler
-
 logger = get_logger(__name__, log_level="INFO")
-
-def mask_schedule(t):
-    return torch.cos(t * math.pi * 0.5)
 
 def get_config():
     cli_conf = OmegaConf.from_cli()
@@ -376,7 +369,7 @@ def main():
     )
     train_dataloader.num_batches = len(train_dataloader)
 
-    lr_scheduler = get_scheduler(
+    lr_scheduler = diffusers.optimization.get_scheduler(
         config.lr_scheduler.scheduler,
         optimizer=optimizer,
         num_training_steps=config.training.max_train_steps,
@@ -479,6 +472,7 @@ def main():
                 pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
                 input_ids = input_ids.to(accelerator.device, non_blocking=True)
                 batch_size = pixel_values.shape[0]
+
                 split_batch_size = config.training.get("split_vae_encode", batch_size)
                 # Use a batch of at most split_vae_encode images to encode and then concat the results
                 num_splits = math.ceil(batch_size / split_batch_size)
@@ -508,18 +502,14 @@ def main():
 
                 batch_size, seq_len = image_tokens.shape
 
-                # Sample a random timestep for each image
                 timesteps = torch.rand(batch_size, device=image_tokens.device)
-                # Sample a random mask probability for each image using timestep and cosine schedule
-                mask_prob = mask_schedule(timesteps)
+                mask_prob = torch.cos(timesteps * math.pi * 0.5)
                 mask_prob = mask_prob.clip(config.training.min_masking_rate)
 
-                # creat a random mask for each image
                 num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
                 batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
                 mask = batch_randperm < num_token_masked.unsqueeze(-1)
 
-                # mask images and create input and labels
                 input_ids = torch.where(mask, mask_id, image_tokens)
                 labels = torch.where(mask, image_tokens, -100)
 

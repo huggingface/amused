@@ -47,7 +47,10 @@ CMD=" \
             'a photo of sks backpack' \
             'a photo of sks riding a bike' \
         --instance_data_dir /fsx/william/cat_toy \
-        --instance_prompt 'A photo of sks toy'
+        --instance_prompt 'A photo of sks toy' \
+        --max_train_steps 2000 \
+        --checkpoints_total_limit 20 \
+        --checkpointing_steps 100
     "
 
 GPUS_PER_NODE=1

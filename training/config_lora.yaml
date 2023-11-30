@@ -1,14 +1,10 @@
 experiment:
-    project: "muse"
-    save_every: 100
     generate_every: 100
     log_every: 50
-    checkpoints_total_limit: 20
 
 
 
 training:
-    max_train_steps: 2000
     cond_dropout_prob: 0.0
     min_masking_rate: 0.0
     label_smoothing: 0.0

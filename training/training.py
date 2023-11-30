@@ -178,6 +178,34 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--max_train_steps",
+        type=int,
+        default=None,
+        help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",
+    )
+    parser.add_argument(
+        "--checkpointing_steps",
+        type=int,
+        default=500,
+        help=(
+            "Save a checkpoint of the training state every X updates. Checkpoints can be used for resuming training via `--resume_from_checkpoint`. "
+            "In the case that the checkpoint is better than the final trained model, the checkpoint can also be used for inference."
+            "Using a checkpoint for inference requires separate loading of the original pipeline and the individual checkpointed model components."
+            "See https://huggingface.co/docs/diffusers/main/en/training/dreambooth#performing-inference-using-a-saved-checkpoint for step by step"
+            "instructions."
+        ),
+    )
+    parser.add_argument(
+        "--checkpoints_total_limit",
+        type=int,
+        default=None,
+        help=(
+            "Max number of checkpoints to store. Passed as `total_limit` to the `Accelerator` `ProjectConfiguration`."
+            " See Accelerator::save_state https://huggingface.co/docs/accelerate/package_reference/accelerator#accelerate.Accelerator.save_state"
+            " for more details"
+        ),
+    )
+    parser.add_argument(
         "--resume_from_checkpoint",
         type=str,
         default=None,
@@ -453,7 +481,7 @@ def main(args):
     lr_scheduler = diffusers.optimization.get_scheduler(
         args.lr_scheduler,
         optimizer=optimizer,
-        num_training_steps=config.training.max_train_steps,
+        num_training_steps=args.max_train_steps,
         num_warmup_steps=args.lr_warmup_steps,
     )
 
@@ -494,11 +522,11 @@ def main(args):
     # Afterwards we recalculate our number of training epochs.
     # Note: We are not doing epoch based training here, but just using this for book keeping and being able to
     # reuse the same training loop with other datasets/loaders.
-    num_train_epochs = math.ceil(config.training.max_train_steps / num_update_steps_per_epoch)
+    num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
 
     # Train!
     logger.info("***** Running training *****")
-    logger.info(f"  Num training steps = {config.training.max_train_steps}")
+    logger.info(f"  Num training steps = {args.max_train_steps}")
     logger.info(f"  Instantaneous batch size per device = { args.train_batch_size}")
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
@@ -630,8 +658,8 @@ def main(args):
                         f"LR: {lr_scheduler.get_last_lr()[0]:0.6f}"
                     )
 
-                if (global_step + 1) % config.experiment.save_every == 0:
-                    save_checkpoint(args, config, accelerator, global_step + 1)
+                if (global_step + 1) % args.checkpointing_steps == 0:
+                    save_checkpoint(args, accelerator, global_step + 1)
 
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
                     if args.use_ema:
@@ -661,7 +689,7 @@ def main(args):
                 global_step += 1
 
             # Stop training if max steps is reached
-            if global_step >= config.training.max_train_steps:
+            if global_step >= args.max_train_steps:
                 break
         # End for
 
@@ -680,19 +708,18 @@ def main(args):
     accelerator.end_training()
 
 
-def save_checkpoint(args, config, accelerator, global_step):
+def save_checkpoint(args, accelerator, global_step):
     output_dir = args.output_dir
-    checkpoints_total_limit = config.experiment.get("checkpoints_total_limit", None)
 
     # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
-    if accelerator.is_main_process and checkpoints_total_limit is not None:
+    if accelerator.is_main_process and args.checkpoints_total_limit is not None:
         checkpoints = os.listdir(output_dir)
         checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
         checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
 
         # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
-        if len(checkpoints) >= checkpoints_total_limit:
-            num_to_remove = len(checkpoints) - checkpoints_total_limit + 1
+        if len(checkpoints) >= args.checkpoints_total_limit:
+            num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
             removing_checkpoints = checkpoints[0:num_to_remove]
 
             logger.info(

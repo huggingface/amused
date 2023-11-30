@@ -196,6 +196,11 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--logging_steps",
+        type=int,
+        default=50,
+    )
+    parser.add_argument(
         "--checkpoints_total_limit",
         type=int,
         default=None,
@@ -248,6 +253,16 @@ def parse_args():
         "--lr_warmup_steps", type=int, default=500, help="Number of steps for the warmup in the lr scheduler."
     )
     parser.add_argument(
+        "--validation_steps",
+        type=int,
+        default=100,
+        help=(
+            "Run validation every X steps. Validation consists of running the prompt"
+            " `args.validation_prompt` multiple times: `args.num_validation_images`"
+            " and logging the images."
+        ),
+    )
+    parser.add_argument(
         "--mixed_precision",
         type=str,
         default=None,
@@ -287,6 +302,13 @@ def parse_args():
             " cropped. The images will be resized to the resolution first before cropping."
         ),
     )
+    parser.add_argument("--split_vae_encode", type=int, required=False, default=None)
+    parser.add_argument("--min_masking_rate", type=float, default=0.0)
+    parser.add_argument("--cond_dropout_prob", type=float, default=0.0)
+    parser.add_argument("--max_grad_norm", default=None, type=float, help="Max gradient norm.", required=False)
+    parser.add_argument("--lora_r", default=16, type=int)
+    parser.add_argument("--lora_alpha", default=32, type=int)
+    parser.add_argument("--lora_target_modules", default=['to_q', 'to_k', 'to_v'], type=str, nargs='+')
 
     args = parser.parse_args()
 
@@ -297,9 +319,6 @@ def parse_args():
     return args
 
 def main(args):
-    config = OmegaConf.load("/fsx/william/amused/training/config_lora.yaml")
-
-    # Enable TF32 on Ampere GPUs
     if args.allow_tf32:
         torch.backends.cuda.matmul.allow_tf32 = True
 
@@ -331,11 +350,9 @@ def main(args):
     if accelerator.is_main_process:
         accelerator.init_trackers("amused", config=vars(copy.deepcopy(args)))
 
-    # If passed along, set the training seed now.
     if args.seed is not None:
         set_seed(args.seed)
 
-    # Potentially load in the weights and states from a previous save
     resume_from_checkpoint = args.resume_from_checkpoint
     if resume_from_checkpoint:
         if resume_from_checkpoint == "latest":
@@ -353,7 +370,6 @@ def main(args):
         else:
             accelerator.print(f"Resuming from checkpoint {resume_from_checkpoint}")
 
-
     text_encoder = CLIPTextModelWithProjection.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant)
     tokenizer = CLIPTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer", revision=args.revision, variant=args.variant)
     vq_model = VQModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="vqvae", revision=args.revision, variant=args.variant)
@@ -368,9 +384,9 @@ def main(args):
             model = PeftModel.from_pretrained(model, os.path.join(resume_from_checkpoint, "transformer"), is_trainable=True)
         else:
             lora_config = LoraConfig(
-                r=16,
-                lora_alpha=32,
-                target_modules=['to_q', 'to_k', 'to_v'],
+                r=args.lora_r,
+                lora_alpha=args.lora_alpha,
+                target_modules=args.lora_target_modules,
             )
             model = get_peft_model(model, lora_config)
     else:
@@ -548,8 +564,7 @@ def main(args):
                 pixel_values = batch["image"].to(accelerator.device, non_blocking=True)
                 batch_size = pixel_values.shape[0]
 
-                split_batch_size = config.training.get("split_vae_encode", batch_size)
-                # Use a batch of at most split_vae_encode images to encode and then concat the results
+                split_batch_size = args.split_vae_encode if args.split_vae_encode is not None else batch_size
                 num_splits = math.ceil(batch_size / split_batch_size)
                 image_tokens = []
                 for i in range(num_splits):
@@ -575,7 +590,7 @@ def main(args):
 
                 timesteps = torch.rand(batch_size, device=image_tokens.device)
                 mask_prob = torch.cos(timesteps * math.pi * 0.5)
-                mask_prob = mask_prob.clip(config.training.min_masking_rate)
+                mask_prob = mask_prob.clip(args.min_masking_rate)
 
                 num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
                 batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
@@ -584,14 +599,14 @@ def main(args):
                 input_ids = torch.where(mask, mask_id, image_tokens)
                 labels = torch.where(mask, image_tokens, -100)
 
-                if config.training.cond_dropout_prob > 0.0:
+                if args.cond_dropout_prob > 0.0:
                     assert encoder_hidden_states is not None
 
                     batch_size = encoder_hidden_states.shape[0]
 
                     mask = (
                         torch.zeros((batch_size, 1, 1), device=encoder_hidden_states.device).float().uniform_(0, 1)
-                        < config.training.cond_dropout_prob
+                        < args.cond_dropout_prob
                     )
 
                     empty_embeds_ = empty_embeds.expand(batch_size, -1, -1)
@@ -621,7 +636,6 @@ def main(args):
                     logits,
                     labels.view(-1),
                     ignore_index=-100,
-                    label_smoothing=0.0,
                     reduction="mean",
                 )
 
@@ -631,8 +645,8 @@ def main(args):
 
                 accelerator.backward(loss)
 
-                if config.training.max_grad_norm is not None and accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(model.parameters(), config.training.max_grad_norm)
+                if args.max_grad_norm is not None and accelerator.sync_gradients:
+                    accelerator.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
                 optimizer.step()
                 lr_scheduler.step()
@@ -644,7 +658,7 @@ def main(args):
                 if args.use_ema:
                     ema.step(model.parameters())
 
-                if (global_step + 1) % config.experiment.log_every == 0:
+                if (global_step + 1) % args.logging_steps == 0:
                     logs = {
                         "step_loss": avg_loss.item(),
                         "lr": lr_scheduler.get_last_lr()[0],
@@ -661,7 +675,7 @@ def main(args):
                 if (global_step + 1) % args.checkpointing_steps == 0:
                     save_checkpoint(args, accelerator, global_step + 1)
 
-                if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
+                if (global_step + 1) % args.validation_steps == 0 and accelerator.is_main_process:
                     if args.use_ema:
                         ema.store(model.parameters())
                         ema.copy_to(model.parameters())
@@ -696,7 +710,7 @@ def main(args):
     accelerator.wait_for_everyone()
 
     # Evaluate and save checkpoint at the end of training
-    save_checkpoint(args, config, accelerator, global_step)
+    save_checkpoint(args, accelerator, global_step)
 
     # Save the final trained checkpoint
     if accelerator.is_main_process:

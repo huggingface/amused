@@ -40,17 +40,14 @@ from transformers import (
     CLIPTextModelWithProjection,
     CLIPTokenizer,
 )
+from diffusers import VQModel
 
 import muse
 import muse.training_utils
 from muse import (
-    MOVQ,
     EMAModel,
     MaskGitTransformer,
     MaskGiTUViT,
-    MaskGitVQGAN,
-    PaellaVQModel,
-    VQGANModel,
 )
 from muse.lr_schedulers import get_scheduler
 
@@ -97,19 +94,6 @@ def flatten_omega_conf(cfg: Any, resolve: bool = False) -> List[Tuple[str, Any]]
         assert False
 
     return ret
-
-
-def get_vq_model_class(model_type):
-    if model_type == "vqgan":
-        return VQGANModel
-    elif model_type == "movq":
-        return MOVQ
-    elif model_type == "maskgit_vqgan":
-        return MaskGitVQGAN
-    elif model_type == "paella_vq":
-        return PaellaVQModel
-    else:
-        raise ValueError(f"model_type {model_type} not supported for VQGAN")
 
 
 class AdapterDataset(Dataset):
@@ -264,8 +248,7 @@ def main():
     if config.model.text_encoder.get("pad_token_id", None):
         tokenizer.pad_token_id = config.model.text_encoder.pad_token_id
 
-    vq_class = get_vq_model_class(config.model.vq_model.type)
-    vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
+    vq_model = VQModel.from_pretrained("openMUSE/diffusers-pipeline", subfolder="vqvae")
 
     # Freeze the text model and VQGAN
     text_encoder.requires_grad_(False)
@@ -523,7 +506,10 @@ def main():
                 for i in range(num_splits):
                     start_idx = i * split_batch_size
                     end_idx = min((i + 1) * split_batch_size, batch_size)
-                    image_tokens.append(vq_model.get_code(pixel_values[start_idx:end_idx]))
+                    bs = pixel_values.shape[0]
+                    image_tokens.append(
+                        vq_model.quantize(vq_model.encode(pixel_values[start_idx:end_idx]).latents)[2][2].reshape(bs, -1)
+                    )
                 image_tokens = torch.cat(image_tokens, dim=0)
 
                 outputs = text_encoder(input_ids, return_dict=True, output_hidden_states=True)
@@ -791,7 +777,21 @@ def generate_images(
     for i in range(num_splits):
         start_idx = i * split_batch_size
         end_idx = min((i + 1) * split_batch_size, batch_size)
+        # TODO - HERE decode
         images.append(vq_model.decode_code(gen_token_ids[start_idx:end_idx]))
+        vae_scale_factor = 2 ** (len(vq_model.config.block_out_channels) - 1)
+        images.append(
+            vq_model.decode(
+                gen_token_ids[start_idx:end_idx],
+                force_not_quantize=True,
+                shape=(
+                    batch_size,
+                    resolution // vae_scale_factor,
+                    resolution // vae_scale_factor,
+                    vq_model.config.latent_channels,
+                ),
+            ).sample.clip(0, 1)
+        )
     images = torch.cat(images, dim=0)
     
     model.train()
@@ -805,7 +805,8 @@ def generate_images(
     pil_images = [Image.fromarray(image) for image in images]
 
     # Log images
-    wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
+    # wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
+    wandb_images = [wandb.Image(image) for i, image in enumerate(pil_images)]
     wandb.log({"generated_images": wandb_images}, step=global_step)
 
 
@@ -831,7 +832,10 @@ def generate_inpainting_images(
 
     validation_images = torch.stack([TF.to_tensor(x) for x in validation_images])
     validation_images = validation_images.to(accelerator.device)
-    _, validation_images = vq_model.encode(validation_images)
+    bs = validation_images.shape[0]
+    validation_images.append(
+        vq_model.quantize(vq_model.encode(validation_images).latents)[2][2].reshape(bs, -1)
+    )
     validation_images[validation_masks] = mask_token_id
 
     token_input_ids = tokenizer(
@@ -880,7 +884,19 @@ def generate_inpainting_images(
     for i in range(num_splits):
         start_idx = i * split_batch_size
         end_idx = min((i + 1) * split_batch_size, batch_size)
-        images.append(vq_model.decode_code(gen_token_ids[start_idx:end_idx]))
+        vae_scale_factor = 2 ** (len(vq_model.config.block_out_channels) - 1)
+        images.append(
+            vq_model.decode(
+                gen_token_ids[start_idx:end_idx],
+                force_not_quantize=True,
+                shape=(
+                    batch_size,
+                    resolution // vae_scale_factor,
+                    resolution // vae_scale_factor,
+                    vq_model.config.latent_channels,
+                ),
+            ).sample.clip(0, 1)
+        )
     images = torch.cat(images, dim=0)
 
     # Convert to PIL images

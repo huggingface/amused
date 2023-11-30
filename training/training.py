@@ -20,7 +20,7 @@ import os
 import random
 import shutil
 from pathlib import Path
-from typing import Any, List, Tuple, Union
+from typing import Any, List, Tuple
 
 import numpy as np
 import torch
@@ -40,13 +40,9 @@ from transformers import (
     CLIPTextModelWithProjection,
     CLIPTokenizer,
 )
-from diffusers import VQModel, EMAModel
+from diffusers import VQModel, EMAModel, UVit2DModel
+import torch.nn.functional as F
 
-import muse
-import muse.training_utils
-from muse import (
-    MaskGiTUViT,
-)
 from muse.lr_schedulers import get_scheduler
 
 logger = get_logger(__name__, log_level="INFO")
@@ -126,12 +122,12 @@ class AdapterDataset(Dataset):
     def __len__(self):
         return self._length
 
-    def _image_transform(self, image, resolution=256):
+    def _image_transform(self, image):
         orig_size = (image.height, image.width)
-        image = transforms.Resize(resolution, interpolation=transforms.InterpolationMode.BILINEAR)(image)
+        image = transforms.Resize(self.size, interpolation=transforms.InterpolationMode.BILINEAR)(image)
         # get crop coordinates
-        c_top, c_left, _, _ = transforms.RandomCrop.get_params(image, output_size=(resolution, resolution))
-        image = transforms.functional.crop(image, c_top, c_left, resolution, resolution)
+        c_top, c_left, _, _ = transforms.RandomCrop.get_params(image, output_size=(self.size, self.size))
+        image = transforms.functional.crop(image, c_top, c_left, self.size, self.size)
         image = transforms.ToTensor()(image)
         crop_coords = (c_top, c_left)
         aes_score = torch.tensor(6.0)
@@ -194,10 +190,6 @@ def main():
         level=logging.INFO,
     )
     logger.info(accelerator.state, main_process_only=False)
-    if accelerator.is_local_main_process:
-        muse.logging.set_verbosity_info()
-    else:
-        muse.logging.set_verbosity_error()
 
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
@@ -253,20 +245,22 @@ def main():
     vq_model.requires_grad_(False)
 
     if config.model.get("pretrained_model_path", None) is not None:
-        model = MaskGiTUViT.from_pretrained(config.model.pretrained_model_path)
+        subfolder = config.model.get("pretrained_model_path_subfolder", None)
+        model = UVit2DModel.from_pretrained(config.model.pretrained_model_path, subfolder=subfolder)
     else:
-        model = MaskGiTUViT(**config.model.transformer)
+        model = UVit2DModel(**config.model.transformer)
+
+    model_config = model.config
     
     if is_lora:
         lora_config = LoraConfig(
-            r=config.training.get("lora_r", 8),
-            lora_alpha=config.training.get("lora_alpha", 32),
-            target_modules=list(config.training.get("lora_target_modules", ["crossattention.query"])),
-            layers_to_transform=list(range(model.config.num_hidden_layers)),
+            r=16,
+            lora_alpha=32,
+            target_modules=['to_q', 'to_k', 'to_v'],
         )
         model = get_peft_model(model, lora_config)
     
-    mask_id = model.config.mask_token_id
+    mask_id = model_config.vocab_size - 1
 
     # Create EMA
     if config.training.get("use_ema", False):
@@ -274,8 +268,8 @@ def main():
             model.parameters(),
             decay=config.training.ema_decay,
             update_after_step=config.training.ema_update_after_step,
-            model_cls=MaskGiTUViT,
-            model_config=model.config,
+            model_cls=UVit2DModel,
+            model_config=model_config,
         )
 
         # Create custom saving and loading hooks so that `accelerator.save_state(...)` serializes in a nice format.
@@ -287,7 +281,7 @@ def main():
                     continue
                 elif isinstance(model, type(accelerator.unwrap_model(EMAModel))):
                     indices_to_pop.append(idx)
-                    load_model = EMAModel.from_pretrained(os.path.join(input_dir, "ema_model"), model_cls=MaskGiTUViT)
+                    load_model = EMAModel.from_pretrained(os.path.join(input_dir, "ema_model"), model_cls=UVit2DModel)
                     ema.load_state_dict(load_model.state_dict())
                     ema.to(accelerator.device)
                     del load_model
@@ -301,10 +295,6 @@ def main():
 
         accelerator.register_load_state_pre_hook(load_model_hook)
         accelerator.register_save_state_pre_hook(save_model_hook)
-
-    # Enable flash attention if asked
-    if config.model.enable_xformers_memory_efficient_attention:
-        model.enable_xformers_memory_efficient_attention()
 
     optimizer_config = config.optimizer.params
     learning_rate = optimizer_config.learning_rate
@@ -486,7 +476,6 @@ def main():
         for batch in train_dataloader:
             with torch.no_grad():
                 pixel_values, input_ids = batch["image"], batch["input_ids"]
-
                 pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
                 input_ids = input_ids.to(accelerator.device, non_blocking=True)
                 batch_size = pixel_values.shape[0]
@@ -591,14 +580,24 @@ def main():
                     empty_clip_embeds_ = empty_clip_embeds.expand(batch_size, -1)
                     cond_embeds = torch.where((cond_embeds * mask.squeeze(-1)).bool(), cond_embeds, empty_clip_embeds_)
 
-                logits, loss = model(
+                bs = input_ids.shape[0]
+                vae_scale_factor = 2 ** (len(vq_model.config.block_out_channels) - 1)
+                resolution = config.dataset.preprocessing.resolution // vae_scale_factor
+                input_ids = input_ids.reshape(bs, resolution, resolution)
+
+                logits = model(
                     input_ids=input_ids,
                     encoder_hidden_states=encoder_hidden_states,
-                    labels=labels,
-                    label_smoothing=config.training.label_smoothing,
-                    cond_embeds=cond_embeds,
-                    loss_weight=None,
                     micro_conds=micro_conds,
+                    pooled_text_emb=cond_embeds,
+                ).reshape(bs, model_config.codebook_size, -1).permute(0, 2, 1).reshape(-1, model_config.codebook_size)
+
+                loss = F.cross_entropy(
+                    logits,
+                    labels.view(-1),
+                    ignore_index=-100,
+                    label_smoothing=0.0,
+                    reduction="mean",
                 )
 
                 # Gather the losses across all processes for logging (if we use distributed training).

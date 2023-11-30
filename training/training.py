@@ -20,6 +20,7 @@ import shutil
 from pathlib import Path
 from typing import Any, List, Tuple
 import argparse
+import copy
 
 import torch
 from accelerate import Accelerator
@@ -171,6 +172,15 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--resume_from_checkpoint",
+        type=str,
+        default=None,
+        help=(
+            "Whether training should be resumed from a previous checkpoint. Use a path saved by"
+            ' `--checkpointing_steps`, or `"latest"` to automatically select the last available checkpoint.'
+        ),
+    )
+    parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
         default=1,
@@ -236,37 +246,15 @@ def main(args):
     )
     logger.info(accelerator.state, main_process_only=False)
 
-    # We need to initialize the trackers we use, and also store our configuration.
-    # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
-        resume_wandb_run = config.experiment.resume_from_checkpoint
-        run_id = config.wandb.get("run_id", None)
-        if run_id is None:
-            resume_wandb_run = False
-            run_id = wandb.util.generate_id()
-            config.wandb.run_id = run_id
-
-        wandb_init_kwargs = dict(
-            name=config.experiment.name,
-            id=run_id,
-            resume=resume_wandb_run,
-            entity=config.wandb.get("entity", None),
-            config_exclude_keys=[],
-        )
-        wandb_config = {k: v for k, v in flatten_omega_conf(config, resolve=True)}
-        wandb_config.pop("experiment.resume_from_checkpoint")
-        accelerator.init_trackers(
-            config.experiment.project,
-            config=wandb_config,
-            init_kwargs={"wandb": wandb_init_kwargs},
-        )
+        accelerator.init_trackers("amused", config=vars(copy.deepcopy(args)))
 
     # If passed along, set the training seed now.
     if config.training.seed is not None:
         set_seed(config.training.seed)
 
     # Potentially load in the weights and states from a previous save
-    resume_from_checkpoint = config.experiment.resume_from_checkpoint
+    resume_from_checkpoint = args.resume_from_checkpoint
     if resume_from_checkpoint:
         if resume_from_checkpoint == "latest":
             # Get the most recent checkpoint
@@ -279,7 +267,7 @@ def main(args):
                 resume_from_checkpoint = None
 
         if resume_from_checkpoint is None:
-            accelerator.print(f"Checkpoint '{config.experiment.resume_from_checkpoint}' does not exist. Starting a new training run.")
+            accelerator.print(f"Checkpoint '{args.resume_from_checkpoint}' does not exist. Starting a new training run.")
         else:
             accelerator.print(f"Resuming from checkpoint {resume_from_checkpoint}")
 

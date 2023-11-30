@@ -27,7 +27,8 @@ CMD=" \
     /fsx/william/amused/training/training.py \
         --output_dir /fsx/william/styledrop-lora-dreambooth-2 \
         --mixed_precision fp16 \
-        --report_to wandb
+        --report_to wandb \
+        --resume_from_checkpoint latest
     "
 
 GPUS_PER_NODE=1

@@ -4,7 +4,7 @@ wandb:
 experiment:
     project: "muse"
     name: "styledrop-lora-dreambooth-2"
-    output_dir: "styledrop-lora-dreambooth-2"
+    output_dir: "/fsx/william/styledrop-lora-dreambooth-2"
     max_train_examples: 3000000 # unused
     max_eval_examples: 20000 # unused
     save_every: 100

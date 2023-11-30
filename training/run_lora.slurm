@@ -24,9 +24,10 @@ touch $LOG_PATH
 pushd $MUSE_REPO
 
 CMD=" \
-    /fsx/william/amused/training/training.py config=$CONFIG_PATH \
-    experiment.name=$(basename $OUTPUT_DIR) \
-    experiment.output_dir=$OUTPUT_DIR \
+    /fsx/william/amused/training/training.py \
+        --output_dir /fsx/william/styledrop-lora-dreambooth-2 \
+        --mixed_precision fp16 \
+        --report_to wandb
     "
 
 GPUS_PER_NODE=1

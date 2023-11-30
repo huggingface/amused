@@ -19,12 +19,12 @@ import os
 import shutil
 from pathlib import Path
 from typing import Any, List, Tuple
+import argparse
 
 import torch
-import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import set_seed
+from accelerate.utils import set_seed, ProjectConfiguration
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from PIL import Image
 from PIL.ImageOps import exif_transpose
@@ -39,17 +39,12 @@ from transformers import (
 from diffusers import VQModel, EMAModel, UVit2DModel, AmusedPipeline, AmusedScheduler
 import diffusers.optimization
 import torch.nn.functional as F
+from diffusers.utils import is_wandb_available
+
+if is_wandb_available():
+    import wandb
 
 logger = get_logger(__name__, log_level="INFO")
-
-def get_config():
-    cli_conf = OmegaConf.from_cli()
-
-    yaml_conf = OmegaConf.load(cli_conf.config)
-    conf = OmegaConf.merge(yaml_conf, cli_conf)
-
-    return conf
-
 
 def flatten_omega_conf(cfg: Any, resolve: bool = False) -> List[Tuple[str, Any]]:
     ret = []
@@ -150,26 +145,84 @@ class AdapterDataset(Dataset):
         example["input_ids"] = text_inputs.input_ids[0]
         return example
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--allow_tf32",
+        action="store_true",
+        help=(
+            "Whether or not to allow TF32 on Ampere GPUs. Can be used to speed up training. For more information, see"
+            " https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices"
+        ),
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="muse_training",
+        help="The output directory where the model predictions and checkpoints will be written.",
+    )
+    parser.add_argument(
+        "--logging_dir",
+        type=str,
+        default="logs",
+        help=(
+            "[TensorBoard](https://www.tensorflow.org/tensorboard) log directory. Will default to"
+            " *output_dir/runs/**CURRENT_DATETIME_HOSTNAME***."
+        ),
+    )
+    parser.add_argument(
+        "--gradient_accumulation_steps",
+        type=int,
+        default=1,
+        help="Number of updates steps to accumulate before performing a backward/update pass.",
+    )
+    parser.add_argument(
+        "--mixed_precision",
+        type=str,
+        default=None,
+        choices=["no", "fp16", "bf16"],
+        help=(
+            "Whether to use mixed precision. Choose between fp16 and bf16 (bfloat16). Bf16 requires PyTorch >="
+            " 1.10.and an Nvidia Ampere GPU.  Default to the value of accelerate config of the current system or the"
+            " flag passed with the `accelerate.launch` command. Use this argument to override the accelerate config."
+        ),
+    )
+    parser.add_argument(
+        "--report_to",
+        type=str,
+        default="tensorboard",
+        help=(
+            'The integration to report the results and logs to. Supported platforms are `"tensorboard"`'
+            ' (default), `"wandb"` and `"comet_ml"`. Use `"all"` to report to all integrations.'
+        ),
+    )
+    args = parser.parse_args()
 
-def main():
+    if args.report_to == "wandb":
+        if not is_wandb_available():
+            raise ImportError("Make sure to install wandb if you want to use it for logging during training.")
+
+    return args
+
+def main(args):
     #########################
     # SETUP Accelerator     #
     #########################
-    config = get_config()
+    config = OmegaConf.load("/fsx/william/amused/training/config_lora.yaml")
 
     # Enable TF32 on Ampere GPUs
-    if config.training.enable_tf32:
+    if args.allow_tf32:
         torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cudnn.deterministic = False
 
-    config.experiment.logging_dir = str(Path(config.experiment.output_dir) / "logs")
+    logging_dir = Path(args.output_dir, args.logging_dir)
+
+    accelerator_project_config = ProjectConfiguration(project_dir=args.output_dir, logging_dir=logging_dir)
+
     accelerator = Accelerator(
-        gradient_accumulation_steps=config.training.gradient_accumulation_steps,
-        mixed_precision=config.training.mixed_precision,
-        log_with="wandb",
-        project_dir=config.experiment.logging_dir,
-        split_batches=True,  # It's important to set this to True when using webdataset to get the right number of steps for lr scheduling. If set to False, the number of steps will be devide by the number of processes assuming batches are multiplied by the number of processes
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        mixed_precision=args.mixed_precision,
+        log_with=args.report_to,
+        project_config=accelerator_project_config,
     )
 
     #####################################
@@ -656,4 +709,4 @@ def save_checkpoint(config, accelerator, global_step):
 
 
 if __name__ == "__main__":
-    main()
+    main(parse_args())

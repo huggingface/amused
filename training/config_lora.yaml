@@ -1,7 +1,5 @@
 experiment:
     project: "muse"
-    max_train_examples: 3000000 # unused
-    max_eval_examples: 20000 # unused
     save_every: 100
     generate_every: 100
     log_every: 50
@@ -11,18 +9,9 @@ experiment:
 dataset:
     type: "text2image"
     params:
-        instance_data_root: "/fsx/william/cat_toy"
-        instance_prompt: "A photo of sks toy"
-        batch_size: ${training.batch_size}
         num_workers: 1
-        resolution: 512
         pin_memory: False
         persistent_workers: False
-    preprocessing:
-        max_seq_length: 77
-        resolution: 512
-        center_crop: False
-        random_flip: False
 
 
 training:

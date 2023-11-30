@@ -45,7 +45,9 @@ CMD=" \
             'a photo sks on a table' \
             'a photo sks sleeping' \
             'a photo of sks backpack' \
-            'a photo of sks riding a bike'
+            'a photo of sks riding a bike' \
+        --instance_data_dir /fsx/william/cat_toy \
+        --instance_prompt 'A photo of sks toy'
     "
 
 GPUS_PER_NODE=1

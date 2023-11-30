@@ -18,7 +18,6 @@ import math
 import os
 import shutil
 from pathlib import Path
-from typing import Any, List, Tuple
 import argparse
 import copy
 
@@ -26,10 +25,9 @@ import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed, ProjectConfiguration
-from omegaconf import DictConfig, ListConfig, OmegaConf
+from omegaconf import OmegaConf
 from PIL import Image
 from PIL.ImageOps import exif_transpose
-from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset, default_collate
 from torchvision import transforms
 from peft import LoraConfig, get_peft_model, PeftModel
@@ -56,16 +54,11 @@ class AdapterDataset(Dataset):
     def __init__(
         self,
         instance_data_root,
-        instance_prompt,
-        tokenizer,
         size=512,
         center_crop=False,
-        tokenizer_max_length=None,
     ):
         self.size = size
         self.center_crop = center_crop
-        self.tokenizer = tokenizer
-        self.tokenizer_max_length = tokenizer_max_length
 
         self.instance_data_root = Path(instance_data_root)
         if not self.instance_data_root.exists():
@@ -73,7 +66,6 @@ class AdapterDataset(Dataset):
 
         self.instance_images_path = list(Path(instance_data_root).iterdir())
         self.num_instance_images = len(self.instance_images_path)
-        self.instance_prompt = instance_prompt
         self._length = self.num_instance_images
 
     def __len__(self):
@@ -105,14 +97,6 @@ class AdapterDataset(Dataset):
         example["crop_coords"] = crop_coords
         example["aesthetic_score"] = aes_score
 
-        text_inputs = self.tokenizer(
-            self.instance_prompt,
-            truncation=True,
-            padding="max_length",
-            max_length=77,
-            return_tensors="pt",
-        )
-        example["input_ids"] = text_inputs.input_ids[0]
         return example
 
 def parse_args():
@@ -136,6 +120,20 @@ def parse_args():
         type=str,
         default=None,
         help="Variant of the model files of the pretrained model identifier from huggingface.co/models, 'e.g.' fp16",
+    )
+    parser.add_argument(
+        "--instance_data_dir",
+        type=str,
+        default=None,
+        required=True,
+        help="A folder containing the training data of instance images.",
+    )
+    parser.add_argument(
+        "--instance_prompt",
+        type=str,
+        default=None,
+        required=True,
+        help="The prompt with identifier specifying the instance",
     )
     parser.add_argument(
         "--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes."
@@ -235,6 +233,24 @@ def parse_args():
     )
     parser.add_argument("--is_lora", action="store_true", help="TODO")
     parser.add_argument("--validation_prompts", type=str, nargs="*")
+    parser.add_argument(
+        "--resolution",
+        type=int,
+        default=512,
+        help=(
+            "The resolution for input images, all the images in the train/validation dataset will be resized to this"
+            " resolution"
+        ),
+    )
+    parser.add_argument(
+        "--center_crop",
+        default=False,
+        action="store_true",
+        help=(
+            "Whether to center crop the input images to the resolution. If not set, the images will be randomly"
+            " cropped. The images will be resized to the resolution first before cropping."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -411,17 +427,14 @@ def main(args):
         args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
     )
 
-    preproc_config = config.dataset.preprocessing
     dataset_config = config.dataset.params
 
     dataset = AdapterDataset(
-        instance_data_root=dataset_config.instance_data_root,
-        instance_prompt=dataset_config.instance_prompt,
-        tokenizer=tokenizer,
-        size=preproc_config.resolution,
-        center_crop=preproc_config.center_crop,
-        tokenizer_max_length=preproc_config.max_seq_length,
+        instance_data_root=args.instance_data_dir,
+        size=args.resolution,
+        center_crop=args.center_crop,
     )
+
     train_dataloader = DataLoader(
         dataset,
         batch_size=args.train_batch_size,
@@ -440,14 +453,10 @@ def main(args):
         num_warmup_steps=args.lr_warmup_steps,
     )
 
-    # Prepare everything with accelerator
     logger.info("Preparing model, optimizer and dataloaders")
     model, optimizer, lr_scheduler, train_dataloader = accelerator.prepare(model, optimizer, lr_scheduler, train_dataloader)
     train_dataloader.num_batches = len(train_dataloader)
 
-    # For mixed precision training we cast the text_encoder and vae weights to half-precision
-    # as these models are only used for inference, keeping weights in full precision is not required.
-    # TODO: make this configurable
     weight_dtype = torch.float32
     if accelerator.mixed_precision == "fp16":
         weight_dtype = torch.float16
@@ -462,8 +471,19 @@ def main(args):
     with torch.no_grad():
         empty_input = tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(accelerator.device)
         outputs = text_encoder(empty_input, output_hidden_states=True)
-    empty_embeds = outputs.hidden_states[-2]
-    empty_clip_embeds = outputs[0]
+        empty_embeds = outputs.hidden_states[-2]
+        empty_clip_embeds = outputs[0]
+
+        instance_prompt_input_ids = tokenizer(
+            args.instance_prompt,
+            truncation=True,
+            padding="max_length",
+            max_length=77,
+            return_tensors="pt",
+        ).input_ids.to(accelerator.device)
+        outputs = text_encoder(instance_prompt_input_ids, return_dict=True, output_hidden_states=True)
+        encoder_hidden_states = outputs.hidden_states[-2].repeat(args.train_batch_size, 1, 1)
+        cond_embeds = outputs[0].repeat(args.train_batch_size, 1)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(train_dataloader.num_batches / args.gradient_accumulation_steps)
@@ -493,9 +513,7 @@ def main(args):
         model.train()
         for batch in train_dataloader:
             with torch.no_grad():
-                pixel_values, input_ids = batch["image"], batch["input_ids"]
-                pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
-                input_ids = input_ids.to(accelerator.device, non_blocking=True)
+                pixel_values = batch["image"].to(accelerator.device, non_blocking=True)
                 batch_size = pixel_values.shape[0]
 
                 split_batch_size = config.training.get("split_vae_encode", batch_size)
@@ -510,10 +528,6 @@ def main(args):
                         vq_model.quantize(vq_model.encode(pixel_values[start_idx:end_idx]).latents)[2][2].reshape(bs, -1)
                     )
                 image_tokens = torch.cat(image_tokens, dim=0)
-
-                outputs = text_encoder(input_ids, return_dict=True, output_hidden_states=True)
-                encoder_hidden_states = outputs.hidden_states[-2]
-                cond_embeds = outputs[0]
 
                 original_sizes = list(map(list, zip(*batch["orig_size"])))
                 crop_coords = list(map(list, zip(*batch["crop_coords"])))
@@ -538,8 +552,6 @@ def main(args):
                 input_ids = torch.where(mask, mask_id, image_tokens)
                 labels = torch.where(mask, image_tokens, -100)
 
-            # Train Step
-            with accelerator.accumulate(model):
                 if config.training.cond_dropout_prob > 0.0:
                     assert encoder_hidden_states is not None
 
@@ -560,9 +572,12 @@ def main(args):
 
                 bs = input_ids.shape[0]
                 vae_scale_factor = 2 ** (len(vq_model.config.block_out_channels) - 1)
-                resolution = config.dataset.preprocessing.resolution // vae_scale_factor
+                resolution = args.resolution // vae_scale_factor
                 input_ids = input_ids.reshape(bs, resolution, resolution)
 
+
+            # Train Step
+            with accelerator.accumulate(model):
                 logits = model(
                     input_ids=input_ids,
                     encoder_hidden_states=encoder_hidden_states,

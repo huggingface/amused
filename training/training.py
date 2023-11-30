@@ -138,6 +138,9 @@ def parse_args():
         help="Variant of the model files of the pretrained model identifier from huggingface.co/models, 'e.g.' fp16",
     )
     parser.add_argument(
+        "--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes."
+    )
+    parser.add_argument(
         "--allow_tf32",
         action="store_true",
         help=(
@@ -148,6 +151,10 @@ def parse_args():
     parser.add_argument("--use_ema", action="store_true", help="Whether to use EMA model.")
     parser.add_argument("--ema_decay", type=float, default=0.9999)
     parser.add_argument("--ema_update_after_step", type=int, default=0)
+    parser.add_argument("--adam_beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
+    parser.add_argument("--adam_beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
+    parser.add_argument("--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use.")
+    parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
     parser.add_argument(
         "--output_dir",
         type=str,
@@ -174,10 +181,37 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--train_batch_size", type=int, default=16, help="Batch size (per device) for the training dataloader."
+    )
+    parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
         default=1,
         help="Number of updates steps to accumulate before performing a backward/update pass.",
+    )
+    parser.add_argument(
+        "--learning_rate",
+        type=float,
+        default=0.0003,
+        help="Initial learning rate (after the potential warmup period) to use.",
+    )
+    parser.add_argument(
+        "--scale_lr",
+        action="store_true",
+        default=False,
+        help="Scale the learning rate by the number of GPUs, gradient accumulation steps, and batch size.",
+    )
+    parser.add_argument(
+        "--lr_scheduler",
+        type=str,
+        default="constant",
+        help=(
+            'The scheduler type to use. Choose between ["linear", "cosine", "cosine_with_restarts", "polynomial",'
+            ' "constant", "constant_with_warmup"]'
+        ),
+    )
+    parser.add_argument(
+        "--lr_warmup_steps", type=int, default=500, help="Number of steps for the warmup in the lr scheduler."
     )
     parser.add_argument(
         "--mixed_precision",
@@ -326,36 +360,32 @@ def main(args):
     accelerator.register_load_state_pre_hook(load_model_hook)
     accelerator.register_save_state_pre_hook(save_model_hook)
 
-    optimizer_config = config.optimizer.params
-    learning_rate = optimizer_config.learning_rate
-    if optimizer_config.scale_lr:
-        learning_rate = (
-            learning_rate
-            * config.training.batch_size
+    if args.scale_lr:
+        args.learning_rate = (
+            args.learning_rate
+            * args.train_batch_size
             * accelerator.num_processes
             * args.gradient_accumulation_steps
         )
 
-    optimizer_type = config.optimizer.name
-    if optimizer_type == "adamw":
-        optimizer_cls = AdamW
-    elif optimizer_type == "8bit_adamw":
+    if args.use_8bit_adam:
         try:
             import bitsandbytes as bnb
         except ImportError:
             raise ImportError(
-                "To use 8-bit Adam, please install the bitsandbytes library: `pip install bitsandbytes`."
+                "Please install bitsandbytes to use 8-bit Adam. You can do so by running `pip install bitsandbytes`"
             )
+
         optimizer_cls = bnb.optim.AdamW8bit
     else:
-        raise ValueError(f"Optimizer {optimizer_type} not supported")
+        optimizer_cls = torch.optim.AdamW
     
     # no decay on bias and layernorm and embedding
     no_decay = ["bias", "layer_norm.weight", "mlm_ln.weight", "embeddings.weight"]
     optimizer_grouped_parameters = [
         {
             "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
-            "weight_decay": optimizer_config.weight_decay,
+            "weight_decay": args.adam_weight_decay,
         },
         {
             "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
@@ -365,10 +395,10 @@ def main(args):
 
     optimizer = optimizer_cls(
         optimizer_grouped_parameters,
-        lr=optimizer_config.learning_rate,
-        betas=(optimizer_config.beta1, optimizer_config.beta2),
-        weight_decay=optimizer_config.weight_decay,
-        eps=optimizer_config.epsilon,
+        lr=args.learning_rate,
+        betas=(args.adam_beta1, args.adam_beta2),
+        weight_decay=args.adam_weight_decay,
+        eps=args.adam_epsilon,
     )
 
     ##################################
@@ -377,13 +407,9 @@ def main(args):
     logger.info("Creating dataloaders and lr_scheduler")
 
     total_batch_size = (
-        config.training.batch_size * accelerator.num_processes * args.gradient_accumulation_steps
+        args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
     )
 
-    # DataLoaders creation:
-    # We use webdataset for data loading. The dataloaders are created with sampling with replacement.
-    # We don't do dataset resuming here, instead we resample the shards and buffer each time. The sampling is stochastic.
-    # This means that the dataloading is not deterministic, but it's fast and efficient.
     preproc_config = config.dataset.preprocessing
     dataset_config = config.dataset.params
 
@@ -397,7 +423,7 @@ def main(args):
     )
     train_dataloader = DataLoader(
         dataset,
-        batch_size=config.training.batch_size,
+        batch_size=args.train_batch_size,
         shuffle=True,
         num_workers=dataset_config.num_workers,
         pin_memory=dataset_config.pin_memory,
@@ -407,10 +433,10 @@ def main(args):
     train_dataloader.num_batches = len(train_dataloader)
 
     lr_scheduler = diffusers.optimization.get_scheduler(
-        config.lr_scheduler.scheduler,
+        args.lr_scheduler,
         optimizer=optimizer,
         num_training_steps=config.training.max_train_steps,
-        num_warmup_steps=config.lr_scheduler.params.warmup_steps,
+        num_warmup_steps=args.lr_warmup_steps,
     )
 
     # Prepare everything with accelerator
@@ -448,7 +474,7 @@ def main(args):
     # Train!
     logger.info("***** Running training *****")
     logger.info(f"  Num training steps = {config.training.max_train_steps}")
-    logger.info(f"  Instantaneous batch size per device = { config.training.batch_size}")
+    logger.info(f"  Instantaneous batch size per device = { args.train_batch_size}")
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
 
@@ -552,8 +578,8 @@ def main(args):
                 )
 
                 # Gather the losses across all processes for logging (if we use distributed training).
-                avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
-                avg_masking_rate = accelerator.gather(mask_prob.repeat(config.training.batch_size)).mean()
+                avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
+                avg_masking_rate = accelerator.gather(mask_prob.repeat(args.train_batch_size)).mean()
 
                 accelerator.backward(loss)
 

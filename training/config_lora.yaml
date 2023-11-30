@@ -26,27 +26,7 @@ dataset:
         random_flip: False
 
 
-optimizer:
-    name: adamw
-    params: # default adamw params
-        learning_rate: 0.0003
-        scale_lr: False # scale learning rate by total batch size
-        beta1: 0.9
-        beta2: 0.999
-        weight_decay: 0.01
-        epsilon: 1e-8
-
-
-lr_scheduler:
-    scheduler: "constant_with_warmup"
-    params:
-        learning_rate: ${optimizer.params.learning_rate}
-        warmup_steps: 2000
-
-
 training:
-    batch_size: 6
-    enable_tf32: True
     max_train_steps: 2000
     cond_dropout_prob: 0.0
     min_masking_rate: 0.0

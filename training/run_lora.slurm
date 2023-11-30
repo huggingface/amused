@@ -31,7 +31,12 @@ CMD=" \
         --resume_from_checkpoint latest \
         --seed 9345104 \
         --is_lora \
-        --pretrained_model_name_or_path openMUSE/diffusers-pipeline
+        --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
+        --train_batch_size 6 \
+        --lr_scheduler constant_with_warmup \
+        --lr_warmup_steps 2000 \
+        --learning_rate 0.0003 \
+        --allow_tf32
     "
 
 GPUS_PER_NODE=1

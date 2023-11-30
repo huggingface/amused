@@ -4,7 +4,6 @@ wandb:
 experiment:
     project: "muse"
     name: "styledrop-lora-dreambooth-2"
-    output_dir: "/fsx/william/styledrop-lora-dreambooth-2"
     max_train_examples: 3000000 # unused
     max_eval_examples: 20000 # unused
     save_every: 100
@@ -105,9 +104,7 @@ lr_scheduler:
 
 
 training:
-    gradient_accumulation_steps: 1
     batch_size: 6
-    mixed_precision: "fp16"
     enable_tf32: True
     use_ema: False
     ema_decay: 0.9999

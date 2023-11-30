@@ -205,9 +205,6 @@ def parse_args():
     return args
 
 def main(args):
-    #########################
-    # SETUP Accelerator     #
-    #########################
     config = OmegaConf.load("/fsx/william/amused/training/config_lora.yaml")
 
     # Enable TF32 on Ampere GPUs
@@ -224,6 +221,9 @@ def main(args):
         log_with=args.report_to,
         project_config=accelerator_project_config,
     )
+
+    if accelerator.is_main_process:
+        os.makedirs(args.output_dir, exist_ok=True)
 
     #####################################
     # SETUP LOGGING, SEED and CONFIG    #
@@ -261,12 +261,6 @@ def main(args):
             init_kwargs={"wandb": wandb_init_kwargs},
         )
 
-    if accelerator.is_main_process:
-        os.makedirs(config.experiment.output_dir, exist_ok=True)
-        config_path = Path(config.experiment.output_dir) / "config.yaml"
-        logging.info(f"Saving config to {config_path}")
-        OmegaConf.save(config, config_path)
-
     # If passed along, set the training seed now.
     if config.training.seed is not None:
         set_seed(config.training.seed)
@@ -276,11 +270,11 @@ def main(args):
     if resume_from_checkpoint:
         if resume_from_checkpoint == "latest":
             # Get the most recent checkpoint
-            dirs = os.listdir(config.experiment.output_dir)
+            dirs = os.listdir(args.output_dir)
             dirs = [d for d in dirs if d.startswith("checkpoint")]
             dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
             if len(dirs) > 0:
-                resume_from_checkpoint = os.path.join(config.experiment.output_dir, dirs[-1])
+                resume_from_checkpoint = os.path.join(args.output_dir, dirs[-1])
             else:
                 resume_from_checkpoint = None
 
@@ -374,7 +368,7 @@ def main(args):
             learning_rate
             * config.training.batch_size
             * accelerator.num_processes
-            * config.training.gradient_accumulation_steps
+            * args.gradient_accumulation_steps
         )
 
     optimizer_type = config.optimizer.name
@@ -418,7 +412,7 @@ def main(args):
     logger.info("Creating dataloaders and lr_scheduler")
 
     total_batch_size = (
-        config.training.batch_size * accelerator.num_processes * config.training.gradient_accumulation_steps
+        config.training.batch_size * accelerator.num_processes * args.gradient_accumulation_steps
     )
 
     # DataLoaders creation:
@@ -480,7 +474,7 @@ def main(args):
     empty_clip_embeds = outputs[0]
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
-    num_update_steps_per_epoch = math.ceil(train_dataloader.num_batches / config.training.gradient_accumulation_steps)
+    num_update_steps_per_epoch = math.ceil(train_dataloader.num_batches / args.gradient_accumulation_steps)
     # Afterwards we recalculate our number of training epochs.
     # Note: We are not doing epoch based training here, but just using this for book keeping and being able to
     # reuse the same training loop with other datasets/loaders.
@@ -491,7 +485,7 @@ def main(args):
     logger.info(f"  Num training steps = {config.training.max_train_steps}")
     logger.info(f"  Instantaneous batch size per device = { config.training.batch_size}")
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
-    logger.info(f"  Gradient Accumulation steps = {config.training.gradient_accumulation_steps}")
+    logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
 
     if resume_from_checkpoint is None:
         global_step = 0
@@ -625,9 +619,8 @@ def main(args):
                         f"LR: {lr_scheduler.get_last_lr()[0]:0.6f}"
                     )
 
-
                 if (global_step + 1) % config.experiment.save_every == 0:
-                    save_checkpoint(config, accelerator, global_step + 1)
+                    save_checkpoint(args, config, accelerator, global_step + 1)
 
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
                     if config.training.get("use_ema", False):
@@ -667,20 +660,20 @@ def main(args):
     accelerator.wait_for_everyone()
 
     # Evaluate and save checkpoint at the end of training
-    save_checkpoint(config, accelerator, global_step)
+    save_checkpoint(args, config, accelerator, global_step)
 
     # Save the final trained checkpoint
     if accelerator.is_main_process:
         model = accelerator.unwrap_model(model)
         if config.training.get("use_ema", False):
             ema.copy_to(model.parameters())
-        model.save_pretrained(config.experiment.output_dir)
+        model.save_pretrained(args.output_dir)
 
     accelerator.end_training()
 
 
-def save_checkpoint(config, accelerator, global_step):
-    output_dir = config.experiment.output_dir
+def save_checkpoint(args, config, accelerator, global_step):
+    output_dir = args.output_dir
     checkpoints_total_limit = config.experiment.get("checkpoints_total_limit", None)
 
     # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`

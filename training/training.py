@@ -260,9 +260,9 @@ def main():
     if is_lora:
         lora_config = LoraConfig(
             r=config.training.get("lora_r", 8),
+            lora_alpha=config.training.get("lora_alpha", 32),
             target_modules=list(config.training.get("lora_target_modules", ["crossattention.query"])),
             layers_to_transform=list(range(model.config.num_hidden_layers)),
-            lora_alpha=config.training.get("lora_alpha", 32),
         )
         model = get_peft_model(model, lora_config)
     

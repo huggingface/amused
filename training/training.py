@@ -207,6 +207,8 @@ def parse_args():
             ' (default), `"wandb"` and `"comet_ml"`. Use `"all"` to report to all integrations.'
         ),
     )
+    parser.add_argument("--is_lora", action="store_true", help="TODO")
+
     args = parser.parse_args()
 
     if args.report_to == "wandb":
@@ -277,8 +279,6 @@ def main(args):
     #########################
     logger.info("Loading models and optimizer")
 
-    is_lora = config.experiment.get("is_lora", False)
-
     text_encoder = CLIPTextModelWithProjection.from_pretrained(config.model.text_encoder.pretrained, projection_dim=768)
     tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
     if config.model.text_encoder.get("pad_token_id", None):
@@ -290,7 +290,7 @@ def main(args):
     text_encoder.requires_grad_(False)
     vq_model.requires_grad_(False)
 
-    if is_lora:
+    if args.is_lora:
         if config.model.get("pretrained_model_path", None) is not None:
             subfolder = config.model.get("pretrained_model_path_subfolder", None)
             model = UVit2DModel.from_pretrained(config.model.pretrained_model_path, subfolder=subfolder)

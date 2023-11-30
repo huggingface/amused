@@ -29,7 +29,8 @@ CMD=" \
         --mixed_precision fp16 \
         --report_to wandb \
         --resume_from_checkpoint latest \
-        --seed 9345104
+        --seed 9345104 \
+        --is_lora
     "
 
 GPUS_PER_NODE=1

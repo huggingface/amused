@@ -6,7 +6,6 @@ experiment:
     generate_every: 100
     log_every: 50
     checkpoints_total_limit: 20
-    is_lora: True
 
 model:
     vq_model:

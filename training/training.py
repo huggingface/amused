@@ -47,37 +47,6 @@ if is_wandb_available():
 
 logger = get_logger(__name__, log_level="INFO")
 
-def flatten_omega_conf(cfg: Any, resolve: bool = False) -> List[Tuple[str, Any]]:
-    ret = []
-
-    def handle_dict(key: Any, value: Any, resolve: bool) -> List[Tuple[str, Any]]:
-        return [(f"{key}.{k1}", v1) for k1, v1 in flatten_omega_conf(value, resolve=resolve)]
-
-    def handle_list(key: Any, value: Any, resolve: bool) -> List[Tuple[str, Any]]:
-        return [(f"{key}.{idx}", v1) for idx, v1 in flatten_omega_conf(value, resolve=resolve)]
-
-    if isinstance(cfg, DictConfig):
-        for k, v in cfg.items_ex(resolve=resolve):
-            if isinstance(v, DictConfig):
-                ret.extend(handle_dict(k, v, resolve=resolve))
-            elif isinstance(v, ListConfig):
-                ret.extend(handle_list(k, v, resolve=resolve))
-            else:
-                ret.append((str(k), v))
-    elif isinstance(cfg, ListConfig):
-        for idx, v in enumerate(cfg._iter_ex(resolve=resolve)):
-            if isinstance(v, DictConfig):
-                ret.extend(handle_dict(idx, v, resolve=resolve))
-            elif isinstance(v, ListConfig):
-                ret.extend(handle_list(idx, v, resolve=resolve))
-            else:
-                ret.append((str(idx), v))
-    else:
-        assert False
-
-    return ret
-
-
 class AdapterDataset(Dataset):
     """
     A dataset to prepare the instance and class images with the prompts for fine-tuning the model.
@@ -148,6 +117,26 @@ class AdapterDataset(Dataset):
 
 def parse_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--pretrained_model_name_or_path",
+        type=str,
+        default=None,
+        required=True,
+        help="Path to pretrained model or model identifier from huggingface.co/models.",
+    )
+    parser.add_argument(
+        "--revision",
+        type=str,
+        default=None,
+        required=False,
+        help="Revision of pretrained model identifier from huggingface.co/models.",
+    )
+    parser.add_argument(
+        "--variant",
+        type=str,
+        default=None,
+        help="Variant of the model files of the pretrained model identifier from huggingface.co/models, 'e.g.' fp16",
+    )
     parser.add_argument(
         "--allow_tf32",
         action="store_true",
@@ -274,28 +263,16 @@ def main(args):
         else:
             accelerator.print(f"Resuming from checkpoint {resume_from_checkpoint}")
 
-    #########################
-    # MODELS and OPTIMIZER  #
-    #########################
-    logger.info("Loading models and optimizer")
 
-    text_encoder = CLIPTextModelWithProjection.from_pretrained(config.model.text_encoder.pretrained, projection_dim=768)
-    tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
-    if config.model.text_encoder.get("pad_token_id", None):
-        tokenizer.pad_token_id = config.model.text_encoder.pad_token_id
+    text_encoder = CLIPTextModelWithProjection.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant)
+    tokenizer = CLIPTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer", revision=args.revision, variant=args.variant)
+    vq_model = VQModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="vqvae", revision=args.revision, variant=args.variant)
 
-    vq_model = VQModel.from_pretrained("openMUSE/diffusers-pipeline", subfolder="vqvae")
-
-    # Freeze the text model and VQGAN
     text_encoder.requires_grad_(False)
     vq_model.requires_grad_(False)
 
     if args.is_lora:
-        if config.model.get("pretrained_model_path", None) is not None:
-            subfolder = config.model.get("pretrained_model_path_subfolder", None)
-            model = UVit2DModel.from_pretrained(config.model.pretrained_model_path, subfolder=subfolder)
-        else:
-            model = UVit2DModel(**config.model.transformer)
+        model = UVit2DModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="transformer", revision=args.revision, variant=args.variant)
     
         if resume_from_checkpoint is not None:
             model = PeftModel.from_pretrained(model, os.path.join(resume_from_checkpoint, "transformer"), is_trainable=True)
@@ -309,11 +286,8 @@ def main(args):
     else:
         if resume_from_checkpoint is not None:
             model = UVit2DModel.from_pretrained(resume_from_checkpoint, subfolder="transformer")
-        elif config.model.get("pretrained_model_path", None) is not None:
-            subfolder = config.model.get("pretrained_model_path_subfolder", None)
-            model = UVit2DModel.from_pretrained(config.model.pretrained_model_path, subfolder=subfolder)
         else:
-            model = UVit2DModel(**config.model.transformer)
+            model = UVit2DModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="transformer", revision=args.revision, variant=args.variant)
 
     model_config = model.config
     

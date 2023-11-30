@@ -7,59 +7,6 @@ experiment:
     log_every: 50
     checkpoints_total_limit: 20
 
-model:
-    vq_model:
-        type: "vqgan"
-        pretrained: "openMUSE/vqgan-f16-8192-laion"
-    
-    text_encoder:
-        type: "clip"
-        pretrained: "openMUSE/clip-vit-large-patch14-text-enc"
-        pad_token_id: 49407
-    
-    architecture: "uvit"
-
-    transformer:
-        vocab_size: 8256 # (8192 + 1 for <mask> = 8193 but 8256 is the next multiple of 8)
-        hidden_size: 1024
-        intermediate_size: 2816
-        num_hidden_layers: 22
-        num_attention_heads: 16
-        in_channels: 768
-        block_out_channels:
-            - 768
-        block_has_attention:
-            - True
-        block_num_heads: 12
-        num_res_blocks: 3
-        res_ffn_factor: 4
-        patch_size: 1
-        encoder_hidden_size: 768
-        add_cross_attention: True
-        project_encoder_hidden_states: True
-        codebook_size: 8192
-        num_vq_tokens: 1024
-        initializer_range: 0.02
-        norm_type: "rmsnorm"
-        layer_norm_eps: 1e-6
-        ln_elementwise_affine: True
-        use_encoder_layernorm: False
-        use_bias: False
-        hidden_dropout: 0.0
-        attention_dropout: 0.0
-        use_codebook_size_for_output: True
-        use_empty_embeds_for_uncond: True
-        cond_embed_dim: 768
-        micro_cond_encode_dim: 256
-        micro_cond_embed_dim: 1280
-        force_down_up_sample: True
-        use_fused_residual_norm: True
-
-    gradient_checkpointing: True
-    enable_xformers_memory_efficient_attention: True
-    pretrained_model_path: "openMUSE/diffusers-pipeline"
-    pretrained_model_path_subfolder: "transformer"
-
 
 dataset:
     type: "text2image"

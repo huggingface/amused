@@ -30,7 +30,8 @@ CMD=" \
         --report_to wandb \
         --resume_from_checkpoint latest \
         --seed 9345104 \
-        --is_lora
+        --is_lora \
+        --pretrained_model_name_or_path openMUSE/diffusers-pipeline
     "
 
 GPUS_PER_NODE=1

@@ -66,6 +66,8 @@ model:
 
     gradient_checkpointing: True
     enable_xformers_memory_efficient_attention: True
+    pretrained_model_path: "openMUSE/diffusers-pipeline"
+    pretrained_model_path_subfolder: "transformer"
 
 
 dataset:

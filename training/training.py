@@ -40,7 +40,7 @@ from transformers import (
     CLIPTextModelWithProjection,
     CLIPTokenizer,
 )
-from diffusers import VQModel, EMAModel, UVit2DModel
+from diffusers import VQModel, EMAModel, UVit2DModel, AmusedPipeline, AmusedScheduler
 import torch.nn.functional as F
 
 from muse.lr_schedulers import get_scheduler
@@ -646,17 +646,25 @@ def main():
                         ema.store(model.parameters())
                         ema.copy_to(model.parameters())
 
-                    generate_images(
-                        model,
-                        vq_model,
-                        text_encoder,
-                        tokenizer,
-                        accelerator,
-                        config,
-                        global_step + 1,
-                        empty_embeds=empty_embeds,
-                        empty_clip_embeds=empty_clip_embeds,
-                    )
+                    with torch.no_grad():
+                        logger.info("Generating images...")
+                        model.eval()
+
+                        # TODO load properly
+                        scheduler = AmusedScheduler.from_pretrained("openMUSE/diffusers-pipeline", subfolder="scheduler")
+
+                        pipe = AmusedPipeline(transformer=accelerator.unwrap_model(model), tokenizer=tokenizer, text_encoder=text_encoder, vqvae=vq_model, scheduler=scheduler)
+                        pipe.set_progress_bar_config(disable=True)
+
+                        with open(config.dataset.params.validation_prompts_file, "r") as f:
+                            validation_prompts = f.read().splitlines()
+
+                        pil_images = pipe(prompt=validation_prompts).images
+
+                        wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
+                        wandb.log({"generated_images": wandb_images}, step=global_step+1)
+
+                        model.train()
 
                     # generate_inpainting_images(
                     #     model,
@@ -694,108 +702,6 @@ def main():
         model.save_pretrained(config.experiment.output_dir)
 
     accelerator.end_training()
-
-
-@torch.no_grad()
-def generate_images(
-    model,
-    vq_model,
-    text_encoder,
-    tokenizer,
-    accelerator,
-    config,
-    global_step,
-    empty_embeds=None,
-    empty_clip_embeds=None,
-):
-    logger.info("Generating images...")
-    model.eval()
-    # fmt: off
-    imagenet_class_names = ['jay', 'castle', 'coffee mug', 'desk', 'Eskimo dog,  husky', 'valley,  vale', 'red wine', 'coral reef', 'mixing bowl', 'cleaver,  meat cleaver,  chopper', 'vine snake', 'bloodhound,  sleuthhound', 'barbershop', 'ski', 'otter', 'snowmobile']
-    # fmt: on
-
-    # read validation prompts from file
-    if config.dataset.params.get("validation_prompts_file", None) is not None:
-        with open(config.dataset.params.validation_prompts_file, "r") as f:
-            validation_prompts = f.read().splitlines()
-    else:
-        validation_prompts = imagenet_class_names
-
-    input_ids = tokenizer(
-        validation_prompts,
-        return_tensors="pt",
-        padding="max_length",
-        truncation=True,
-        max_length=config.dataset.preprocessing.max_seq_length,
-    ).input_ids
-
-    outputs = text_encoder(input_ids.to(accelerator.device), return_dict=True, output_hidden_states=True)
-    encoder_hidden_states = outputs.hidden_states[-2]
-    clip_embeds = outputs[0]
-
-    resolution = config.dataset.preprocessing.resolution
-    micro_conds = torch.tensor(
-        [resolution, resolution, 0, 0, 6], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype
-    )
-    micro_conds = micro_conds.unsqueeze(0).repeat(encoder_hidden_states.shape[0], 1)
-    
-    with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
-        # Generate images
-        gen_token_ids = accelerator.unwrap_model(model).generate2(
-            encoder_hidden_states=encoder_hidden_states,
-            cond_embeds=clip_embeds,
-            empty_embeds=empty_embeds,
-            empty_cond_embeds=empty_clip_embeds,
-            micro_conds=micro_conds,
-            guidance_scale=config.training.guidance_scale,
-            temperature=config.training.get("generation_temperature", 1.0),
-            timesteps=config.training.generation_timesteps,
-            noise_schedule=mask_schedule,
-            noise_type=config.training.get("noise_type", "mask"),
-            predict_all_tokens=config.training.get("predict_all_tokens", False),
-            seq_len=config.model.transformer.num_vq_tokens,
-        )
-    # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
-    # so we clamp them to the correct range.
-    gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
-    
-    batch_size = gen_token_ids.shape[0]
-    split_batch_size = config.training.get("split_vae_encode", batch_size)
-    # Use a batch of at most split_vae_encode images to encode and then concat the results
-    num_splits = math.ceil(batch_size / split_batch_size)
-    images = []
-    for i in range(num_splits):
-        start_idx = i * split_batch_size
-        end_idx = min((i + 1) * split_batch_size, batch_size)
-        vae_scale_factor = 2 ** (len(vq_model.config.block_out_channels) - 1)
-        images.append(
-            vq_model.decode(
-                gen_token_ids[start_idx:end_idx],
-                force_not_quantize=True,
-                shape=(
-                    batch_size,
-                    resolution // vae_scale_factor,
-                    resolution // vae_scale_factor,
-                    vq_model.config.latent_channels,
-                ),
-            ).sample.clip(0, 1)
-        )
-    images = torch.cat(images, dim=0)
-    
-    model.train()
-
-    # Convert to PIL images
-    images = 2.0 * images - 1.0
-    images = torch.clamp(images, -1.0, 1.0)
-    images = (images + 1.0) / 2.0
-    images *= 255.0
-    images = images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
-    pil_images = [Image.fromarray(image) for image in images]
-
-    # Log images
-    # wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
-    wandb_images = [wandb.Image(image) for i, image in enumerate(pil_images)]
-    wandb.log({"generated_images": wandb_images}, step=global_step)
 
 
 @torch.no_grad()

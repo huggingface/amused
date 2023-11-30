@@ -28,7 +28,8 @@ CMD=" \
         --output_dir /fsx/william/styledrop-lora-dreambooth-2 \
         --mixed_precision fp16 \
         --report_to wandb \
-        --resume_from_checkpoint latest
+        --resume_from_checkpoint latest \
+        --seed 9345104
     "
 
 GPUS_PER_NODE=1

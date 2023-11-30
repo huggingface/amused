@@ -162,6 +162,7 @@ def parse_args():
         default="muse_training",
         help="The output directory where the model predictions and checkpoints will be written.",
     )
+    parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
     parser.add_argument(
         "--logging_dir",
         type=str,
@@ -250,8 +251,8 @@ def main(args):
         accelerator.init_trackers("amused", config=vars(copy.deepcopy(args)))
 
     # If passed along, set the training seed now.
-    if config.training.seed is not None:
-        set_seed(config.training.seed)
+    if args.seed is not None:
+        set_seed(args.seed)
 
     # Potentially load in the weights and states from a previous save
     resume_from_checkpoint = args.resume_from_checkpoint

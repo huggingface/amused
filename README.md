@@ -290,6 +290,9 @@ Generate a number of images and manually select those you think are of good qual
 as you want but less than 12 is sufficient. Move the selected images and the initial image to a 
 separate folder. 
 
+TODO - "good quality" is not entirely correct. Do a better explanation of what images we are looking
+for
+
 ```sh
 python training/generate_images.py \
     --pretrained_model_name_or_path openMUSE/diffusers-pipeline \

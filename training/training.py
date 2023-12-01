@@ -46,21 +46,41 @@ if is_wandb_available():
 
 logger = get_logger(__name__, log_level="INFO")
 
+def process_image(image, size):
+    image = exif_transpose(image)
+
+    if not image.mode == "RGB":
+        image = image.convert("RGB")
+
+    orig_height = image.height
+    orig_width = image.width
+
+    image = transforms.Resize(size, interpolation=transforms.InterpolationMode.BILINEAR)(image)
+
+    c_top, c_left, _, _ = transforms.RandomCrop.get_params(image, output_size=(size, size))
+    image = transforms.functional.crop(image, c_top, c_left, size, size)
+
+    image = transforms.ToTensor()(image)
+
+    micro_conds = torch.tensor(
+        [
+            orig_width,
+            orig_height,
+            c_top,
+            c_left,
+            6.0
+        ],
+    )
+
+    return {"image": image, "micro_conds": micro_conds}
 
 class AdapterDataset(Dataset):
-    """
-    A dataset to prepare the instance and class images with the prompts for fine-tuning the model.
-    It pre-processes the images and the tokenizes prompts.
-    """
-
     def __init__(
         self,
         instance_data_root,
         size=512,
-        center_crop=False,
     ):
         self.size = size
-        self.center_crop = center_crop
 
         self.instance_data_root = Path(instance_data_root)
         if not self.instance_data_root.exists():
@@ -73,34 +93,9 @@ class AdapterDataset(Dataset):
     def __len__(self):
         return self._length
 
-    def _image_transform(self, image):
-        orig_size = (image.height, image.width)
-        image = transforms.Resize(self.size, interpolation=transforms.InterpolationMode.BILINEAR)(image)
-        # get crop coordinates
-        c_top, c_left, _, _ = transforms.RandomCrop.get_params(image, output_size=(self.size, self.size))
-        image = transforms.functional.crop(image, c_top, c_left, self.size, self.size)
-        image = transforms.ToTensor()(image)
-        crop_coords = (c_top, c_left)
-        aes_score = torch.tensor(6.0)
-        return image, crop_coords, orig_size, aes_score
-
     def __getitem__(self, index):
-        example = {}
         instance_image = Image.open(self.instance_images_path[index % self.num_instance_images])
-        instance_image = exif_transpose(instance_image)
-
-        if not instance_image.mode == "RGB":
-            instance_image = instance_image.convert("RGB")
-
-        instance_image = instance_image.resize((self.size, self.size), Image.BILINEAR)
-        instance_image, crop_coords, orig_size, aes_score = self._image_transform(instance_image)
-        example["image"] = instance_image
-        example["orig_size"] = orig_size
-        example["crop_coords"] = crop_coords
-        example["aesthetic_score"] = aes_score
-
-        return example
-
+        return process_image(instance_image, self.size)
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -128,8 +123,15 @@ def parse_args():
         "--instance_data_dir",
         type=str,
         default=None,
-        required=True,
+        required=False,
         help="A folder containing the training data of instance images.",
+    )
+    parser.add_argument(
+        "--instance_data_image",
+        type=str,
+        default=None,
+        required=False,
+        help="A single training image"
     )
     parser.add_argument(
         "--instance_prompt",
@@ -285,7 +287,6 @@ def parse_args():
             ' (default), `"wandb"` and `"comet_ml"`. Use `"all"` to report to all integrations.'
         ),
     )
-    parser.add_argument("--is_lora", action="store_true", help="TODO")
     parser.add_argument("--validation_prompts", type=str, nargs="*")
     parser.add_argument(
         "--resolution",
@@ -296,19 +297,11 @@ def parse_args():
             " resolution"
         ),
     )
-    parser.add_argument(
-        "--center_crop",
-        default=False,
-        action="store_true",
-        help=(
-            "Whether to center crop the input images to the resolution. If not set, the images will be randomly"
-            " cropped. The images will be resized to the resolution first before cropping."
-        ),
-    )
     parser.add_argument("--split_vae_encode", type=int, required=False, default=None)
     parser.add_argument("--min_masking_rate", type=float, default=0.0)
     parser.add_argument("--cond_dropout_prob", type=float, default=0.0)
     parser.add_argument("--max_grad_norm", default=None, type=float, help="Max gradient norm.", required=False)
+    parser.add_argument("--use_lora", action="store_true", help="TODO")
     parser.add_argument("--lora_r", default=16, type=int)
     parser.add_argument("--lora_alpha", default=32, type=int)
     parser.add_argument("--lora_target_modules", default=["to_q", "to_k", "to_v"], type=str, nargs="+")
@@ -318,6 +311,11 @@ def parse_args():
     if args.report_to == "wandb":
         if not is_wandb_available():
             raise ImportError("Make sure to install wandb if you want to use it for logging during training.")
+
+    if (args.instance_data_dir is not None and args.instance_data_image is not None) or (
+        args.instance_data_dir is None and args.instance_data_image is None
+    ):
+        raise ValueError("provide one and only one of `--instance_data_dir` and `--instance_data_image`")
 
     return args
 
@@ -389,7 +387,7 @@ def main(args):
     text_encoder.requires_grad_(False)
     vq_model.requires_grad_(False)
 
-    if args.is_lora:
+    if args.use_lora:
         model = UVit2DModel.from_pretrained(
             args.pretrained_model_name_or_path, subfolder="transformer", revision=args.revision, variant=args.variant
         )
@@ -498,7 +496,6 @@ def main(args):
     dataset = AdapterDataset(
         instance_data_root=args.instance_data_dir,
         size=args.resolution,
-        center_crop=args.center_crop,
     )
 
     train_dataloader = DataLoader(
@@ -579,6 +576,7 @@ def main(args):
         model.train()
         for batch in train_dataloader:
             with torch.no_grad():
+                micro_conds = batch["micro_conds"].to(accelerator.device, non_blocking=True)
                 pixel_values = batch["image"].to(accelerator.device, non_blocking=True)
                 batch_size = pixel_values.shape[0]
 
@@ -595,21 +593,6 @@ def main(args):
                         )
                     )
                 image_tokens = torch.cat(image_tokens, dim=0)
-
-                original_sizes = list(map(list, zip(*batch["orig_size"])))
-                crop_coords = list(map(list, zip(*batch["crop_coords"])))
-
-                aesthetic_scores = batch["aesthetic_score"]
-                micro_conds = torch.cat(
-                    [
-                        torch.tensor(original_sizes).cpu(),
-                        torch.tensor(crop_coords).cpu(),
-                        aesthetic_scores.unsqueeze(-1).cpu(),
-                    ],
-                    dim=-1,
-                )
-
-                micro_conds = micro_conds.to(cond_embeds.device, non_blocking=True)
 
                 batch_size, seq_len = image_tokens.shape
 

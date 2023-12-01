@@ -32,7 +32,8 @@ def parse_args():
     parser.add_argument(
         "--load_transformer_from",
         type=str,
-        required=True,
+        required=False,
+        default=None,
     )
     parser.add_argument("--device", type=str, default='cuda')
     parser.add_argument("--batch_size", type=int, default=1)
@@ -78,9 +79,12 @@ def main(args):
     logger.warning(f"loading models")
 
     pipe = AmusedPipeline.from_pretrained(args.pretrained_model_name_or_path, revision=args.revision, variant=args.variant)
-    pipe.transformer = PeftModel.from_pretrained(
-        pipe.transformer, os.path.join(args.load_transformer_from), is_trainable=False
-    )
+
+    if args.load_transformer_from is not None:
+        pipe.transformer = PeftModel.from_pretrained(
+            pipe.transformer, os.path.join(args.load_transformer_from), is_trainable=False
+        )
+
     pipe.to(args.device)
 
     logger.warning(f"generating images")

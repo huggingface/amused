@@ -84,13 +84,6 @@ def parse_args():
         help="A single training image"
     )
     parser.add_argument(
-        "--instance_prompt",
-        type=str,
-        default=None,
-        required=True,
-        help="The prompt with identifier specifying the instance",
-    )
-    parser.add_argument(
         "--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes."
     )
     parser.add_argument(
@@ -285,17 +278,24 @@ class InstanceDataRootDataset(Dataset):
     def __init__(
         self,
         instance_data_root,
+        tokenizer,
         size=512,
     ):
         self.size = size
+        self.tokenizer = tokenizer
         self.instance_images_path = list(Path(instance_data_root).iterdir())
 
     def __len__(self):
         return len(self.instance_images_path)
 
     def __getitem__(self, index):
-        instance_image = Image.open(self.instance_images_path[index % len(self.instance_images_path)])
-        return process_image(instance_image, self.size)
+        image_path = self.instance_images_path[index % len(self.instance_images_path)]
+        instance_image = Image.open(image_path)
+        rv = process_image(instance_image, self.size)
+
+        prompt = os.path.splitext(os.path.basename(image_path))[0]
+        rv["prompt_input_ids"] = tokenize_prompt(self.tokenizer, prompt)[0]
+        return rv
 
 class InstanceDataImageDataset(Dataset):
     def __init__(
@@ -338,6 +338,23 @@ def process_image(image, size):
     )
 
     return {"image": image, "micro_conds": micro_conds}
+
+@torch.no_grad()
+def tokenize_prompt(tokenizer, prompt):
+    return tokenizer(
+        prompt,
+        truncation=True,
+        padding="max_length",
+        max_length=77,
+        return_tensors="pt",
+    ).input_ids
+
+@torch.no_grad()
+def encode_prompt(text_encoder, input_ids):
+    outputs = text_encoder(input_ids, return_dict=True, output_hidden_states=True)
+    encoder_hidden_states = outputs.hidden_states[-2]
+    cond_embeds = outputs[0]
+    return encoder_hidden_states, cond_embeds
 
 
 def main(args):
@@ -516,6 +533,7 @@ def main(args):
     if args.instance_data_dir is not None:
         dataset = InstanceDataRootDataset(
             instance_data_root=args.instance_data_dir,
+            tokenizer=tokenizer,
             size=args.resolution,
         )
     else:
@@ -557,22 +575,14 @@ def main(args):
     if args.use_ema:
         ema.to(accelerator.device)
 
-    with torch.no_grad():
-        empty_input = tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(accelerator.device)
-        outputs = text_encoder(empty_input, output_hidden_states=True)
-        empty_embeds = outputs.hidden_states[-2]
-        empty_clip_embeds = outputs[0]
+    empty_embeds, empty_clip_embeds = encode_prompt(text_encoder, tokenize_prompt(tokenizer, "").to(text_encoder.device, non_blocking=True))
 
-        instance_prompt_input_ids = tokenizer(
-            args.instance_prompt,
-            truncation=True,
-            padding="max_length",
-            max_length=77,
-            return_tensors="pt",
-        ).input_ids.to(accelerator.device)
-        outputs = text_encoder(instance_prompt_input_ids, return_dict=True, output_hidden_states=True)
-        encoder_hidden_states = outputs.hidden_states[-2].repeat(args.train_batch_size, 1, 1)
-        cond_embeds = outputs[0].repeat(args.train_batch_size, 1)
+    # There is a single image, we can just pre-encode the single prompt
+    if args.instance_data_image is not None:
+        prompt = os.path.splitext(os.path.basename(args.instance_data_image))[0]
+        encoder_hidden_states, cond_embeds = encode_prompt(text_encoder, tokenize_prompt(tokenizer, prompt).to(text_encoder.device, non_blocking=True))
+        encoder_hidden_states = encoder_hidden_states.repeat(args.train_batch_size, 1, 1)
+        cond_embeds = cond_embeds.repeat(args.train_batch_size, 1)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(train_dataloader.num_batches / args.gradient_accumulation_steps)
@@ -604,6 +614,10 @@ def main(args):
             with torch.no_grad():
                 micro_conds = batch["micro_conds"].to(accelerator.device, non_blocking=True)
                 pixel_values = batch["image"].to(accelerator.device, non_blocking=True)
+
+                if "prompt_input_ids" in batch:
+                    encoder_hidden_states, cond_embeds = encode_prompt(text_encoder, batch["prompt_input_ids"].to(accelerator.device, non_blocking=True))
+
                 batch_size = pixel_values.shape[0]
 
                 split_batch_size = args.split_vae_encode if args.split_vae_encode is not None else batch_size
@@ -737,7 +751,6 @@ def main(args):
                             vqvae=vq_model,
                             scheduler=scheduler,
                         )
-                        pipe.set_progress_bar_config(disable=True)
 
                         pil_images = pipe(prompt=args.validation_prompts).images
                         wandb_images = [

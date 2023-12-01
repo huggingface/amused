@@ -251,6 +251,83 @@ image.save('text2image_256.png')
 
 ### Styledrop
 
+[Styledrop](https://arxiv.org/abs/2306.00983) is an efficient finetuning method for learning a new style.
+It has an optional first stage to generates additional training samples. The additional training samples can
+augment a small number of initial images such you need as little as 1 initial image.
+
+#### Step 1
+
+You need a small initial dataset of the style you want to teach the model. We will start with a single image.
+
+![example](./training/A%20woman%20working%20on%20a%20laptop%20in%20[V]%20style.jpg)
+
+All prompts should be of the form "<description of subject> in <identifier for style> style". The training script
+uses the convention that the name of the file is its prompt. The identifier for the style can be the spelled out
+name of the style e.g. "in a watercolor style". It can also be symbolic e.g. "[V]". Just keep the identifier consistent.
+
+```sh
+accelerate launch ./training/training.py \
+    --output_dir <where to save checkpoints> \
+    --mixed_precision fp16 \
+    --report_to wandb \
+    --use_lora \
+    --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
+    --train_batch_size 1 \
+    --lr_scheduler constant \
+    --learning_rate 0.00003 \
+    --validation_prompts \
+        'A chihuahua walking on the street in [V] style' \
+        'A banana on the table in [V] style' \
+        'A church on the street in [V] style' \
+        'A tabby cat walking in the forest in [V] style' \
+    --instance_data_image './training/A woman working on a laptop in [V] style.jpg' \
+    --max_train_steps 1000 \
+    --checkpointing_steps 500 \
+    --validation_steps 100
+```
+
+Generate a number of images and manually select those you think are of good quality. Select as many 
+as you want but less than 12 is sufficient. Move the selected images and the initial image to a 
+separate folder. 
+
+```sh
+python styledrop_generate_end_of_stage_1_images.py \
+    --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
+    --write_images_to <where to save images> \
+    --load_transformer_from <output_dir from step 1>
+```
+
+e.g.
+
+TODO put images here
+
+#### Step 2
+
+Train the model on the selected images and the initial images.
+
+```sh
+accelerate launch training.py \
+    --output_dir <same output_dir as step 1> \
+    --instance_data_dir <the directory you moved the good images to> \
+    --resume_from latest \
+    --mixed_precision fp16 \
+    --report_to wandb \
+    --use_lora \
+    --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
+    --train_batch_size 8 \
+    --lr_scheduler constant \
+    --learning_rate 0.00003 \
+    --validation_prompts \
+        'A chihuahua walking on the street in [V] style' \
+        'A chihuahua walking on the street in [V] style' \
+        'A banana on the table in [V] style' \
+        'A church on the street in [V] style' \
+        'A tabby cat walking in the forest in [V] style' \
+    --max_train_steps 1000 \
+    --checkpointing_steps 500 \
+    --validation_steps 100
+```
+
 ## 4. Acknowledgements
 
 ## 5. Citation

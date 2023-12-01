@@ -46,56 +46,6 @@ if is_wandb_available():
 
 logger = get_logger(__name__, log_level="INFO")
 
-def process_image(image, size):
-    image = exif_transpose(image)
-
-    if not image.mode == "RGB":
-        image = image.convert("RGB")
-
-    orig_height = image.height
-    orig_width = image.width
-
-    image = transforms.Resize(size, interpolation=transforms.InterpolationMode.BILINEAR)(image)
-
-    c_top, c_left, _, _ = transforms.RandomCrop.get_params(image, output_size=(size, size))
-    image = transforms.functional.crop(image, c_top, c_left, size, size)
-
-    image = transforms.ToTensor()(image)
-
-    micro_conds = torch.tensor(
-        [
-            orig_width,
-            orig_height,
-            c_top,
-            c_left,
-            6.0
-        ],
-    )
-
-    return {"image": image, "micro_conds": micro_conds}
-
-class AdapterDataset(Dataset):
-    def __init__(
-        self,
-        instance_data_root,
-        size=512,
-    ):
-        self.size = size
-
-        self.instance_data_root = Path(instance_data_root)
-        if not self.instance_data_root.exists():
-            raise ValueError(f"Instance {self.instance_data_root} images root doesn't exists.")
-
-        self.instance_images_path = list(Path(instance_data_root).iterdir())
-        self.num_instance_images = len(self.instance_images_path)
-        self._length = self.num_instance_images
-
-    def __len__(self):
-        return self._length
-
-    def __getitem__(self, index):
-        instance_image = Image.open(self.instance_images_path[index % self.num_instance_images])
-        return process_image(instance_image, self.size)
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -318,6 +268,57 @@ def parse_args():
         raise ValueError("provide one and only one of `--instance_data_dir` and `--instance_data_image`")
 
     return args
+
+class AdapterDataset(Dataset):
+    def __init__(
+        self,
+        instance_data_root,
+        size=512,
+    ):
+        self.size = size
+
+        self.instance_data_root = Path(instance_data_root)
+        if not self.instance_data_root.exists():
+            raise ValueError(f"Instance {self.instance_data_root} images root doesn't exists.")
+
+        self.instance_images_path = list(Path(instance_data_root).iterdir())
+        self.num_instance_images = len(self.instance_images_path)
+        self._length = self.num_instance_images
+
+    def __len__(self):
+        return self._length
+
+    def __getitem__(self, index):
+        instance_image = Image.open(self.instance_images_path[index % self.num_instance_images])
+        return process_image(instance_image, self.size)
+
+def process_image(image, size):
+    image = exif_transpose(image)
+
+    if not image.mode == "RGB":
+        image = image.convert("RGB")
+
+    orig_height = image.height
+    orig_width = image.width
+
+    image = transforms.Resize(size, interpolation=transforms.InterpolationMode.BILINEAR)(image)
+
+    c_top, c_left, _, _ = transforms.RandomCrop.get_params(image, output_size=(size, size))
+    image = transforms.functional.crop(image, c_top, c_left, size, size)
+
+    image = transforms.ToTensor()(image)
+
+    micro_conds = torch.tensor(
+        [
+            orig_width,
+            orig_height,
+            c_top,
+            c_left,
+            6.0
+        ],
+    )
+
+    return {"image": image, "micro_conds": micro_conds}
 
 
 def main(args):

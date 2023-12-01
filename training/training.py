@@ -268,10 +268,6 @@ def parse_args():
         if not os.path.exists(args.instance_data_image):
             raise ValueError(f"Does not exist: `--args.instance_data_image` {args.instance_data_image}")
 
-    if args.instance_data_image is not None:
-        if args.train_batch_size != 1:
-            raise ValueError(f"`--instance_data_image` requires `--train_batch_size 1` not {args.train_batch_size}")
-
     return args
 
 class InstanceDataRootDataset(Dataset):
@@ -301,12 +297,16 @@ class InstanceDataImageDataset(Dataset):
     def __init__(
         self,
         instance_data_image,
+        train_batch_size,
         size=512,
     ):
         self.value = process_image(Image.open(instance_data_image), size)
+        self.train_batch_size = train_batch_size
 
     def __len__(self):
-        return 1
+        # Needed so a full batch of the data can be returned. Otherwise will return
+        # batches of size 1
+        return self.train_batch_size
 
     def __getitem__(self, index):
         return self.value
@@ -451,6 +451,8 @@ def main(args):
                 variant=args.variant,
             )
 
+    model.train()
+
     model_config = model.config
 
     mask_id = model_config.vocab_size - 1
@@ -539,6 +541,7 @@ def main(args):
     else:
         dataset = InstanceDataImageDataset(
             instance_data_image=args.instance_data_image,
+            train_batch_size=args.train_batch_size,
             size=args.resolution,
         )
 
@@ -609,7 +612,6 @@ def main(args):
     # As stated above, we are not doing epoch based training here, but just using this for book keeping and being able to
     # reuse the same training loop with other datasets/loaders.
     for epoch in range(first_epoch, num_train_epochs):
-        model.train()
         for batch in train_dataloader:
             with torch.no_grad():
                 micro_conds = batch["micro_conds"].to(accelerator.device, non_blocking=True)

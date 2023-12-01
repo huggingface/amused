@@ -13,37 +13,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import argparse
+import copy
 import logging
 import math
 import os
 import shutil
 from pathlib import Path
-import argparse
-import copy
 
 import torch
+import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import set_seed, ProjectConfiguration
-from omegaconf import OmegaConf
+from accelerate.utils import ProjectConfiguration, set_seed
+from peft import LoraConfig, PeftModel, get_peft_model
 from PIL import Image
 from PIL.ImageOps import exif_transpose
 from torch.utils.data import DataLoader, Dataset, default_collate
 from torchvision import transforms
-from peft import LoraConfig, get_peft_model, PeftModel
 from transformers import (
     CLIPTextModelWithProjection,
     CLIPTokenizer,
 )
-from diffusers import VQModel, EMAModel, UVit2DModel, AmusedPipeline, AmusedScheduler
+
 import diffusers.optimization
-import torch.nn.functional as F
+from diffusers import AmusedPipeline, AmusedScheduler, EMAModel, UVit2DModel, VQModel
 from diffusers.utils import is_wandb_available
+
 
 if is_wandb_available():
     import wandb
 
 logger = get_logger(__name__, log_level="INFO")
+
 
 class AdapterDataset(Dataset):
     """
@@ -89,7 +91,7 @@ class AdapterDataset(Dataset):
 
         if not instance_image.mode == "RGB":
             instance_image = instance_image.convert("RGB")
-        
+
         instance_image = instance_image.resize((self.size, self.size), Image.BILINEAR)
         instance_image, crop_coords, orig_size, aes_score = self._image_transform(instance_image)
         example["image"] = instance_image
@@ -98,6 +100,7 @@ class AdapterDataset(Dataset):
         example["aesthetic_score"] = aes_score
 
         return example
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -308,7 +311,7 @@ def parse_args():
     parser.add_argument("--max_grad_norm", default=None, type=float, help="Max gradient norm.", required=False)
     parser.add_argument("--lora_r", default=16, type=int)
     parser.add_argument("--lora_alpha", default=32, type=int)
-    parser.add_argument("--lora_target_modules", default=['to_q', 'to_k', 'to_v'], type=str, nargs='+')
+    parser.add_argument("--lora_target_modules", default=["to_q", "to_k", "to_v"], type=str, nargs="+")
 
     args = parser.parse_args()
 
@@ -317,6 +320,7 @@ def parse_args():
             raise ImportError("Make sure to install wandb if you want to use it for logging during training.")
 
     return args
+
 
 def main(args):
     if args.allow_tf32:
@@ -366,22 +370,34 @@ def main(args):
                 resume_from_checkpoint = None
 
         if resume_from_checkpoint is None:
-            accelerator.print(f"Checkpoint '{args.resume_from_checkpoint}' does not exist. Starting a new training run.")
+            accelerator.print(
+                f"Checkpoint '{args.resume_from_checkpoint}' does not exist. Starting a new training run."
+            )
         else:
             accelerator.print(f"Resuming from checkpoint {resume_from_checkpoint}")
 
-    text_encoder = CLIPTextModelWithProjection.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant)
-    tokenizer = CLIPTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer", revision=args.revision, variant=args.variant)
-    vq_model = VQModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="vqvae", revision=args.revision, variant=args.variant)
+    text_encoder = CLIPTextModelWithProjection.from_pretrained(
+        args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant
+    )
+    tokenizer = CLIPTokenizer.from_pretrained(
+        args.pretrained_model_name_or_path, subfolder="tokenizer", revision=args.revision, variant=args.variant
+    )
+    vq_model = VQModel.from_pretrained(
+        args.pretrained_model_name_or_path, subfolder="vqvae", revision=args.revision, variant=args.variant
+    )
 
     text_encoder.requires_grad_(False)
     vq_model.requires_grad_(False)
 
     if args.is_lora:
-        model = UVit2DModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="transformer", revision=args.revision, variant=args.variant)
-    
+        model = UVit2DModel.from_pretrained(
+            args.pretrained_model_name_or_path, subfolder="transformer", revision=args.revision, variant=args.variant
+        )
+
         if resume_from_checkpoint is not None:
-            model = PeftModel.from_pretrained(model, os.path.join(resume_from_checkpoint, "transformer"), is_trainable=True)
+            model = PeftModel.from_pretrained(
+                model, os.path.join(resume_from_checkpoint, "transformer"), is_trainable=True
+            )
         else:
             lora_config = LoraConfig(
                 r=args.lora_r,
@@ -393,10 +409,15 @@ def main(args):
         if resume_from_checkpoint is not None:
             model = UVit2DModel.from_pretrained(resume_from_checkpoint, subfolder="transformer")
         else:
-            model = UVit2DModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="transformer", revision=args.revision, variant=args.variant)
+            model = UVit2DModel.from_pretrained(
+                args.pretrained_model_name_or_path,
+                subfolder="transformer",
+                revision=args.revision,
+                variant=args.variant,
+            )
 
     model_config = model.config
-    
+
     mask_id = model_config.vocab_size - 1
 
     if args.use_ema:
@@ -431,10 +452,7 @@ def main(args):
 
     if args.scale_lr:
         args.learning_rate = (
-            args.learning_rate
-            * args.train_batch_size
-            * accelerator.num_processes
-            * args.gradient_accumulation_steps
+            args.learning_rate * args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
         )
 
     if args.use_8bit_adam:
@@ -448,7 +466,7 @@ def main(args):
         optimizer_cls = bnb.optim.AdamW8bit
     else:
         optimizer_cls = torch.optim.AdamW
-    
+
     # no decay on bias and layernorm and embedding
     no_decay = ["bias", "layer_norm.weight", "mlm_ln.weight", "embeddings.weight"]
     optimizer_grouped_parameters = [
@@ -475,9 +493,7 @@ def main(args):
     #################################
     logger.info("Creating dataloaders and lr_scheduler")
 
-    total_batch_size = (
-        args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
-    )
+    total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
     dataset = AdapterDataset(
         instance_data_root=args.instance_data_dir,
@@ -502,7 +518,9 @@ def main(args):
     )
 
     logger.info("Preparing model, optimizer and dataloaders")
-    model, optimizer, lr_scheduler, train_dataloader = accelerator.prepare(model, optimizer, lr_scheduler, train_dataloader)
+    model, optimizer, lr_scheduler, train_dataloader = accelerator.prepare(
+        model, optimizer, lr_scheduler, train_dataloader
+    )
     train_dataloader.num_batches = len(train_dataloader)
 
     weight_dtype = torch.float32
@@ -572,18 +590,25 @@ def main(args):
                     end_idx = min((i + 1) * split_batch_size, batch_size)
                     bs = pixel_values.shape[0]
                     image_tokens.append(
-                        vq_model.quantize(vq_model.encode(pixel_values[start_idx:end_idx]).latents)[2][2].reshape(bs, -1)
+                        vq_model.quantize(vq_model.encode(pixel_values[start_idx:end_idx]).latents)[2][2].reshape(
+                            bs, -1
+                        )
                     )
                 image_tokens = torch.cat(image_tokens, dim=0)
 
                 original_sizes = list(map(list, zip(*batch["orig_size"])))
                 crop_coords = list(map(list, zip(*batch["crop_coords"])))
-    
+
                 aesthetic_scores = batch["aesthetic_score"]
                 micro_conds = torch.cat(
-                    [torch.tensor(original_sizes).cpu(), torch.tensor(crop_coords).cpu(), aesthetic_scores.unsqueeze(-1).cpu()], dim=-1
+                    [
+                        torch.tensor(original_sizes).cpu(),
+                        torch.tensor(crop_coords).cpu(),
+                        aesthetic_scores.unsqueeze(-1).cpu(),
+                    ],
+                    dim=-1,
                 )
-    
+
                 micro_conds = micro_conds.to(cond_embeds.device, non_blocking=True)
 
                 batch_size, seq_len = image_tokens.shape
@@ -622,15 +647,19 @@ def main(args):
                 resolution = args.resolution // vae_scale_factor
                 input_ids = input_ids.reshape(bs, resolution, resolution)
 
-
             # Train Step
             with accelerator.accumulate(model):
-                logits = model(
-                    input_ids=input_ids,
-                    encoder_hidden_states=encoder_hidden_states,
-                    micro_conds=micro_conds,
-                    pooled_text_emb=cond_embeds,
-                ).reshape(bs, model_config.codebook_size, -1).permute(0, 2, 1).reshape(-1, model_config.codebook_size)
+                logits = (
+                    model(
+                        input_ids=input_ids,
+                        encoder_hidden_states=encoder_hidden_states,
+                        micro_conds=micro_conds,
+                        pooled_text_emb=cond_embeds,
+                    )
+                    .reshape(bs, model_config.codebook_size, -1)
+                    .permute(0, 2, 1)
+                    .reshape(-1, model_config.codebook_size)
+                )
 
                 loss = F.cross_entropy(
                     logits,
@@ -685,15 +714,29 @@ def main(args):
 
                         model.eval()
 
-                        scheduler = AmusedScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", revision=args.revision, variant=args.variant)
+                        scheduler = AmusedScheduler.from_pretrained(
+                            args.pretrained_model_name_or_path,
+                            subfolder="scheduler",
+                            revision=args.revision,
+                            variant=args.variant,
+                        )
 
-                        pipe = AmusedPipeline(transformer=accelerator.unwrap_model(model), tokenizer=tokenizer, text_encoder=text_encoder, vqvae=vq_model, scheduler=scheduler)
+                        pipe = AmusedPipeline(
+                            transformer=accelerator.unwrap_model(model),
+                            tokenizer=tokenizer,
+                            text_encoder=text_encoder,
+                            vqvae=vq_model,
+                            scheduler=scheduler,
+                        )
                         pipe.set_progress_bar_config(disable=True)
 
                         pil_images = pipe(prompt=args.validation_prompts).images
-                        wandb_images = [wandb.Image(image, caption=args.validation_prompts[i]) for i, image in enumerate(pil_images)]
+                        wandb_images = [
+                            wandb.Image(image, caption=args.validation_prompts[i])
+                            for i, image in enumerate(pil_images)
+                        ]
 
-                        wandb.log({"generated_images": wandb_images}, step=global_step+1)
+                        wandb.log({"generated_images": wandb_images}, step=global_step + 1)
 
                         model.train()
 

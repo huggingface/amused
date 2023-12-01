@@ -272,7 +272,7 @@ accelerate launch ./training/training.py \
     --report_to wandb \
     --use_lora \
     --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
-    --train_batch_size 1 \
+    --train_batch_size 8 \
     --lr_scheduler constant \
     --learning_rate 0.00003 \
     --validation_prompts \
@@ -291,7 +291,7 @@ as you want but less than 12 is sufficient. Move the selected images and the ini
 separate folder. 
 
 ```sh
-python styledrop_generate_end_of_stage_1_images.py \
+python training/generate_images.py \
     --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
     --write_images_to <where to save images> \
     --load_transformer_from <output_dir from step 1>

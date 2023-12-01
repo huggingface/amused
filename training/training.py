@@ -267,30 +267,49 @@ def parse_args():
     ):
         raise ValueError("provide one and only one of `--instance_data_dir` and `--instance_data_image`")
 
+    if args.instance_data_dir is not None:
+        if not os.path.exists(args.instance_data_dir):
+            raise ValueError(f"Does not exist: `--args.instance_data_dir` {args.instance_data_dir}")
+
+    if args.instance_data_image is not None:
+        if not os.path.exists(args.instance_data_image):
+            raise ValueError(f"Does not exist: `--args.instance_data_image` {args.instance_data_image}")
+
+    if args.instance_data_image is not None:
+        if args.train_batch_size != 1:
+            raise ValueError(f"`--instance_data_image` requires `--train_batch_size 1` not {args.train_batch_size}")
+
     return args
 
-class AdapterDataset(Dataset):
+class InstanceDataRootDataset(Dataset):
     def __init__(
         self,
         instance_data_root,
         size=512,
     ):
         self.size = size
-
-        self.instance_data_root = Path(instance_data_root)
-        if not self.instance_data_root.exists():
-            raise ValueError(f"Instance {self.instance_data_root} images root doesn't exists.")
-
         self.instance_images_path = list(Path(instance_data_root).iterdir())
-        self.num_instance_images = len(self.instance_images_path)
-        self._length = self.num_instance_images
 
     def __len__(self):
-        return self._length
+        return len(self.instance_images_path)
 
     def __getitem__(self, index):
-        instance_image = Image.open(self.instance_images_path[index % self.num_instance_images])
+        instance_image = Image.open(self.instance_images_path[index % len(self.instance_images_path)])
         return process_image(instance_image, self.size)
+
+class InstanceDataImageDataset(Dataset):
+    def __init__(
+        self,
+        instance_data_image,
+        size=512,
+    ):
+        self.value = process_image(Image.open(instance_data_image), size)
+
+    def __len__(self):
+        return 1
+
+    def __getitem__(self, index):
+        return self.value
 
 def process_image(image, size):
     image = exif_transpose(image)
@@ -494,10 +513,16 @@ def main(args):
 
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
-    dataset = AdapterDataset(
-        instance_data_root=args.instance_data_dir,
-        size=args.resolution,
-    )
+    if args.instance_data_dir is not None:
+        dataset = InstanceDataRootDataset(
+            instance_data_root=args.instance_data_dir,
+            size=args.resolution,
+        )
+    else:
+        dataset = InstanceDataImageDataset(
+            instance_data_image=args.instance_data_image,
+            size=args.resolution,
+        )
 
     train_dataloader = DataLoader(
         dataset,

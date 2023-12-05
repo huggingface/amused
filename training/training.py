@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from contextlib import nullcontext
 import argparse
 import copy
 import logging
@@ -20,6 +21,7 @@ import math
 import os
 import shutil
 from pathlib import Path
+from datasets import load_dataset
 
 import torch
 import torch.nn.functional as F
@@ -68,6 +70,13 @@ def parse_args():
         type=str,
         default=None,
         help="Variant of the model files of the pretrained model identifier from huggingface.co/models, 'e.g.' fp16",
+    )
+    parser.add_argument(
+        "--instance_data_dataset",
+        type=str,
+        default=None,
+        required=False,
+        help="A Hugging Face dataset containing the training images",
     )
     parser.add_argument(
         "--instance_data_dir",
@@ -248,6 +257,15 @@ def parse_args():
     parser.add_argument("--lora_r", default=16, type=int)
     parser.add_argument("--lora_alpha", default=32, type=int)
     parser.add_argument("--lora_target_modules", default=["to_q", "to_k", "to_v"], type=str, nargs="+")
+    parser.add_argument("--train_text_encoder", action="store_true")
+    parser.add_argument("--image_key", type=str, required=False)
+    parser.add_argument("--prompt_key", type=str, required=False)
+    parser.add_argument(
+        "--gradient_checkpointing",
+        action="store_true",
+        help="Whether or not to use gradient checkpointing to save memory at the expense of slower backward pass.",
+    )
+    parser.add_argument("--prompt_prefix", type=str, required=False, default=None)
 
     args = parser.parse_args()
 
@@ -255,10 +273,10 @@ def parse_args():
         if not is_wandb_available():
             raise ImportError("Make sure to install wandb if you want to use it for logging during training.")
 
-    if (args.instance_data_dir is not None and args.instance_data_image is not None) or (
-        args.instance_data_dir is None and args.instance_data_image is None
-    ):
-        raise ValueError("provide one and only one of `--instance_data_dir` and `--instance_data_image`")
+    num_datasources = sum([x is not None for x in [args.instance_data_dir, args.instance_data_image, args.instance_data_dataset]])
+
+    if num_datasources != 1:
+        raise ValueError("provide one and only one of `--instance_data_dir`, `--instance_data_image`, or `--instance_data_dataset`")
 
     if args.instance_data_dir is not None:
         if not os.path.exists(args.instance_data_dir):
@@ -267,6 +285,9 @@ def parse_args():
     if args.instance_data_image is not None:
         if not os.path.exists(args.instance_data_image):
             raise ValueError(f"Does not exist: `--args.instance_data_image` {args.instance_data_image}")
+
+    if args.instance_data_dataset is not None and (args.image_key is None or args.prompt_key is None):
+        raise ValueError("`--instance_data_dataset` requires setting `--image_key` and `--prompt_key`")
 
     return args
 
@@ -311,6 +332,40 @@ class InstanceDataImageDataset(Dataset):
     def __getitem__(self, index):
         return self.value
 
+class HuggingFaceDataset(Dataset):
+    def __init__(
+        self,
+        hf_dataset,
+        tokenizer,
+        image_key,
+        prompt_key,
+        prompt_prefix=None,
+        size=512,
+    ):
+        self.size = size
+        self.image_key = image_key
+        self.prompt_key = prompt_key
+        self.tokenizer = tokenizer
+        self.hf_dataset = hf_dataset
+        self.prompt_prefix = prompt_prefix
+
+    def __len__(self):
+        return len(self.hf_dataset)
+
+    def __getitem__(self, index):
+        item = self.hf_dataset[index]
+
+        rv = process_image(item[self.image_key], self.size)
+
+        prompt = item[self.prompt_key]
+
+        if self.prompt_prefix is not None:
+            prompt = self.prompt_prefix + prompt
+
+        rv["prompt_input_ids"] = tokenize_prompt(self.tokenizer, prompt)[0]
+
+        return rv
+
 def process_image(image, size):
     image = exif_transpose(image)
 
@@ -349,7 +404,6 @@ def tokenize_prompt(tokenizer, prompt):
         return_tensors="pt",
     ).input_ids
 
-@torch.no_grad()
 def encode_prompt(text_encoder, input_ids):
     outputs = text_encoder(input_ids, return_dict=True, output_hidden_states=True)
     encoder_hidden_states = outputs.hidden_states[-2]
@@ -375,9 +429,6 @@ def main(args):
     if accelerator.is_main_process:
         os.makedirs(args.output_dir, exist_ok=True)
 
-    #####################################
-    # SETUP LOGGING, SEED and CONFIG    #
-    #####################################
     # Make one log on every process with the configuration for debugging.
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -411,6 +462,7 @@ def main(args):
         else:
             accelerator.print(f"Resuming from checkpoint {resume_from_checkpoint}")
 
+    # TODO - will have to fix loading if training text encoder
     text_encoder = CLIPTextModelWithProjection.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant
     )
@@ -421,7 +473,13 @@ def main(args):
         args.pretrained_model_name_or_path, subfolder="vqvae", revision=args.revision, variant=args.variant
     )
 
-    text_encoder.requires_grad_(False)
+    if args.train_text_encoder:
+        text_encoder.train()
+        text_encoder.requires_grad_(True)
+    else:
+        text_encoder.eval()
+        text_encoder.requires_grad_(False)
+
     vq_model.requires_grad_(False)
 
     if args.use_lora:
@@ -453,9 +511,10 @@ def main(args):
 
     model.train()
 
-    model_config = model.config
-
-    mask_id = model_config.vocab_size - 1
+    if args.gradient_checkpointing:
+        model.enable_gradient_checkpointing()
+        if args.train_text_encoder:
+            text_encoder.gradient_checkpointing_enable()
 
     if args.use_ema:
         if resume_from_checkpoint is not None:
@@ -466,14 +525,18 @@ def main(args):
                 decay=args.ema_decay,
                 update_after_step=args.ema_update_after_step,
                 model_cls=UVit2DModel,
-                model_config=model_config,
+                model_config=model.config,
             )
 
     def save_model_hook(models, weights, output_dir):
         if accelerator.is_main_process:
-            assert len(models) == 1
-            models[0].save_pretrained(os.path.join(output_dir, "transformer"))
-            weights.pop()
+            for model in models:
+                if isinstance(model, UVit2DModel):
+                    models[0].save_pretrained(os.path.join(output_dir, "transformer"))
+                elif isinstance(model, CLIPTextModelWithProjection):
+                    models[0].save_pretrained(os.path.join(output_dir, "text_encoder"))
+
+                weights.pop()
 
             if args.use_ema:
                 ema.save_pretrained(os.path.join(output_dir, "ema_model"))
@@ -481,8 +544,8 @@ def main(args):
     def load_model_hook(models, input_dir):
         # All models are initially instantiated from the checkpoint and so
         # don't have to be loaded in the accelerate hook
-        assert len(models) == 1
-        models.pop()
+        for _ in range(len(models)):
+            models.pop()
 
     accelerator.register_load_state_pre_hook(load_model_hook)
     accelerator.register_save_state_pre_hook(save_model_hook)
@@ -517,6 +580,7 @@ def main(args):
         },
     ]
 
+    # TODO - does not actually take text encoder parameters
     optimizer = optimizer_cls(
         optimizer_grouped_parameters,
         lr=args.learning_rate,
@@ -525,9 +589,6 @@ def main(args):
         eps=args.adam_epsilon,
     )
 
-    ##################################
-    # DATLOADER and LR-SCHEDULER     #
-    #################################
     logger.info("Creating dataloaders and lr_scheduler")
 
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -538,12 +599,23 @@ def main(args):
             tokenizer=tokenizer,
             size=args.resolution,
         )
-    else:
+    elif args.instance_data_image is not None:
         dataset = InstanceDataImageDataset(
             instance_data_image=args.instance_data_image,
             train_batch_size=args.train_batch_size,
             size=args.resolution,
         )
+    elif args.instance_data_dataset is not None:
+        dataset = HuggingFaceDataset(
+            hf_dataset=load_dataset(args.instance_data_dataset, split="train"),
+            tokenizer=tokenizer,
+            image_key=args.image_key,
+            prompt_key=args.prompt_key,
+            prompt_prefix=args.prompt_prefix,
+            size=args.resolution,
+        )
+    else:
+        assert False
 
     train_dataloader = DataLoader(
         dataset,
@@ -557,14 +629,21 @@ def main(args):
     lr_scheduler = diffusers.optimization.get_scheduler(
         args.lr_scheduler,
         optimizer=optimizer,
-        num_training_steps=args.max_train_steps,
-        num_warmup_steps=args.lr_warmup_steps,
+        num_training_steps=args.max_train_steps*accelerator.num_processes,
+        num_warmup_steps=args.lr_warmup_steps*accelerator.num_processes,
     )
 
     logger.info("Preparing model, optimizer and dataloaders")
-    model, optimizer, lr_scheduler, train_dataloader = accelerator.prepare(
-        model, optimizer, lr_scheduler, train_dataloader
-    )
+
+    if args.train_text_encoder:
+        model, optimizer, lr_scheduler, train_dataloader, text_encoder = accelerator.prepare(
+            model, optimizer, lr_scheduler, train_dataloader, text_encoder
+        )
+    else:
+        model, optimizer, lr_scheduler, train_dataloader = accelerator.prepare(
+            model, optimizer, lr_scheduler, train_dataloader
+        )
+
     train_dataloader.num_batches = len(train_dataloader)
 
     weight_dtype = torch.float32
@@ -573,19 +652,23 @@ def main(args):
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
-    text_encoder.to(device=accelerator.device, dtype=weight_dtype)
+    if not args.train_text_encoder:
+        text_encoder.to(device=accelerator.device, dtype=weight_dtype)
+
     vq_model.to(device=accelerator.device)
+
     if args.use_ema:
         ema.to(accelerator.device)
+ 
+    with nullcontext() if args.train_text_encoder else torch.no_grad():
+        empty_embeds, empty_clip_embeds = encode_prompt(text_encoder, tokenize_prompt(tokenizer, "").to(text_encoder.device, non_blocking=True))
 
-    empty_embeds, empty_clip_embeds = encode_prompt(text_encoder, tokenize_prompt(tokenizer, "").to(text_encoder.device, non_blocking=True))
-
-    # There is a single image, we can just pre-encode the single prompt
-    if args.instance_data_image is not None:
-        prompt = os.path.splitext(os.path.basename(args.instance_data_image))[0]
-        encoder_hidden_states, cond_embeds = encode_prompt(text_encoder, tokenize_prompt(tokenizer, prompt).to(text_encoder.device, non_blocking=True))
-        encoder_hidden_states = encoder_hidden_states.repeat(args.train_batch_size, 1, 1)
-        cond_embeds = cond_embeds.repeat(args.train_batch_size, 1)
+        # There is a single image, we can just pre-encode the single prompt
+        if args.instance_data_image is not None:
+            prompt = os.path.splitext(os.path.basename(args.instance_data_image))[0]
+            encoder_hidden_states, cond_embeds = encode_prompt(text_encoder, tokenize_prompt(tokenizer, prompt).to(text_encoder.device, non_blocking=True))
+            encoder_hidden_states = encoder_hidden_states.repeat(args.train_batch_size, 1, 1)
+            cond_embeds = cond_embeds.repeat(args.train_batch_size, 1)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(train_dataloader.num_batches / args.gradient_accumulation_steps)
@@ -617,9 +700,6 @@ def main(args):
                 micro_conds = batch["micro_conds"].to(accelerator.device, non_blocking=True)
                 pixel_values = batch["image"].to(accelerator.device, non_blocking=True)
 
-                if "prompt_input_ids" in batch:
-                    encoder_hidden_states, cond_embeds = encode_prompt(text_encoder, batch["prompt_input_ids"].to(accelerator.device, non_blocking=True))
-
                 batch_size = pixel_values.shape[0]
 
                 split_batch_size = args.split_vae_encode if args.split_vae_encode is not None else batch_size
@@ -646,6 +726,7 @@ def main(args):
                 batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
                 mask = batch_randperm < num_token_masked.unsqueeze(-1)
 
+                mask_id = accelerator.unwrap_model(model).config.vocab_size - 1
                 input_ids = torch.where(mask, mask_id, image_tokens)
                 labels = torch.where(mask, image_tokens, -100)
 
@@ -671,9 +752,15 @@ def main(args):
                 vae_scale_factor = 2 ** (len(vq_model.config.block_out_channels) - 1)
                 resolution = args.resolution // vae_scale_factor
                 input_ids = input_ids.reshape(bs, resolution, resolution)
+                
+            if "prompt_input_ids" in batch:
+                with nullcontext() if args.train_text_encoder else torch.no_grad():
+                    encoder_hidden_states, cond_embeds = encode_prompt(text_encoder, batch["prompt_input_ids"].to(accelerator.device, non_blocking=True))
 
             # Train Step
             with accelerator.accumulate(model):
+                codebook_size = accelerator.unwrap_model(model).config.codebook_size
+
                 logits = (
                     model(
                         input_ids=input_ids,
@@ -681,9 +768,9 @@ def main(args):
                         micro_conds=micro_conds,
                         pooled_text_emb=cond_embeds,
                     )
-                    .reshape(bs, model_config.codebook_size, -1)
+                    .reshape(bs, codebook_size, -1)
                     .permute(0, 2, 1)
-                    .reshape(-1, model_config.codebook_size)
+                    .reshape(-1, codebook_size)
                 )
 
                 loss = F.cross_entropy(
@@ -738,6 +825,9 @@ def main(args):
                         logger.info("Generating images...")
 
                         model.eval()
+                        
+                        if args.train_text_encoder:
+                            text_encoder.eval()
 
                         scheduler = AmusedScheduler.from_pretrained(
                             args.pretrained_model_name_or_path,
@@ -763,6 +853,9 @@ def main(args):
                         wandb.log({"generated_images": wandb_images}, step=global_step + 1)
 
                         model.train()
+
+                        if args.train_text_encoder:
+                            text_encoder.train()
 
                     if args.use_ema:
                         ema.restore(model.parameters())

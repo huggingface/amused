@@ -3,6 +3,7 @@ import logging
 from diffusers import AmusedPipeline
 import os
 from peft import PeftModel
+from diffusers import UVit2DModel
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,12 @@ def parse_args():
     parser.add_argument("--style_descriptor", type=str, default="[V]")
     parser.add_argument(
         "--load_transformer_from",
+        type=str,
+        required=False,
+        default=None,
+    )
+    parser.add_argument(
+        "--load_transformer_lora_from",
         type=str,
         required=False,
         default=None,
@@ -78,9 +85,19 @@ def main(args):
 
     logger.warning(f"loading models")
 
-    pipe = AmusedPipeline.from_pretrained(args.pretrained_model_name_or_path, revision=args.revision, variant=args.variant)
+    pipe_args = {}
 
     if args.load_transformer_from is not None:
+        pipe_args["transformer"] = UVit2DModel.from_pretrained(args.load_transformer_from)
+    
+    pipe = AmusedPipeline.from_pretrained(
+        pretrained_model_name_or_path=args.pretrained_model_name_or_path,
+        revision=args.revision, 
+        variant=args.variant,
+        **pipe_args
+    )
+
+    if args.load_transformer_lora_from is not None:
         pipe.transformer = PeftModel.from_pretrained(
             pipe.transformer, os.path.join(args.load_transformer_from), is_trainable=False
         )

@@ -297,7 +297,7 @@ for
 python training/generate_images.py \
     --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
     --write_images_to <where to save images> \
-    --load_transformer_from <output_dir from step 1>
+    --load_transformer_lora_from <output_dir from step 1>
 ```
 
 e.g.

@@ -10,10 +10,8 @@
 
 | Model | Params |
 |-------|--------|
-| [amused-256](https://huggingface.co/openMUSE/diffusers-pipeline-256-finetuned) | 603M |
-| [amused-512](https://huggingface.co/openMUSE/diffusers-pipeline) | 608M |
-
-TODO - checkpoints
+| TODO - update [amused-256](https://huggingface.co/openMUSE/diffusers-pipeline-256-finetuned) | 603M |
+| TODO - update [amused-512](https://huggingface.co/openMUSE/diffusers-pipeline) | 608M |
 
 TODO - why/where to use amused
 
@@ -571,6 +569,8 @@ accelerate launch ./training/training.py \
 ```
 
 ## 4. Acknowledgements
+
+TODO
 
 ## 5. Citation
 ```

@@ -302,7 +302,7 @@ accelerate launch training/training.py \
 
 #### Full finetuning + 8 bit adam
 
-Note that as is this training config will eventually diverge (though after starting to give good results).
+Note that this training config keeps the batch size low and the learning rate high to get results fast with low resources. However, due to 8 bit adam, it will diverge eventually. If you want to train for longer, you will have to up the batch size and lower the learning rate.
 
 Batch size: 16, Learning rate: 2e-5, Gives decent results in ~750 steps
 

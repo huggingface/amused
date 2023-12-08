@@ -249,6 +249,256 @@ image.save('text2image_256.png')
 
 ## 3. Training
 
+Amused can be finetuned on simple datasets relatively cheaply and quickly. Using 8bit optimizers, lora, and gradient accumulation, amused can be finetuned with as little as 5.5 GB. Here are a set of examples for finetuning amused on some relatively simple datasets. These training recipies are aggressively oriented towards minimal resources and fast verification -- i.e. the batch sizes are quite low and the learning rates are quite high. For optimal quality, you will probably want to increase the batch sizes and decrease learning rates.
+
+All training examples use fp16 mixed precision and gradient checkpointing. We don't show 8 bit adam + lora as its about the same memory use as just using lora (bitsandbytes uses full precision optimizer states for weights below a minimum size).
+
+### Finetuning the 256 checkpoint
+
+These examples finetune on this [nouns](https://huggingface.co/datasets/m1guelpf/nouns) dataset.
+
+Some example results:
+
+![noun1](./assets/noun1.png) ![noun2](./assets/noun2.png) ![noun3](./assets/noun3.png)
+
+#### Full finetuning
+
+Batch size: 8, Learning rate: 1e-4, Gives decent results in 750-1000 steps
+
+| Batch Size | Gradient Accumulation Steps | Effective Total Batch Size | Memory Used |
+|------------|-----------------------------|------------------|-------------|
+|    8        |          1                   |     8             |      19.7 GB       |
+|    4        |          2                   |     8             |      18.3 GB       |
+|    1        |          8                   |     8             |      17.9 GB       |
+
+```sh
+# TODO - update model path
+accelerate launch training/training.py \
+    --output_dir <output path> \
+    --train_batch_size <batch size> \
+    --gradient_accumulation_steps <gradient accumulation steps> \
+    --learning_rate 1e-4 \
+    --pretrained_model_name_or_path openMUSE/diffusers-pipeline-256-finetuned \
+    --instance_data_dataset  'm1guelpf/nouns' \
+    --image_key image \
+    --prompt_key text \
+    --resolution 256 \
+    --mixed_precision fp16 \
+    --lr_scheduler constant \
+    --validation_prompts \
+        'a pixel art character with square red glasses, a baseball-shaped head and a orange-colored body on a dark background' \
+        'a pixel art character with square orange glasses, a lips-shaped head and a red-colored body on a light background' \
+        'a pixel art character with square blue glasses, a microwave-shaped head and a purple-colored body on a sunny background' \
+        'a pixel art character with square red glasses, a baseball-shaped head and a blue-colored body on an orange background' \
+        'a pixel art character with square red glasses' \
+        'a pixel art character' \
+        'square red glasses on a pixel art character' \
+        'square red glasses on a pixel art character with a baseball-shaped head' \
+    --max_train_steps 10000 \
+    --checkpointing_steps 500 \
+    --validation_steps 250 \
+    --gradient_checkpointing
+```
+
+#### Full finetuning + 8 bit adam
+
+Note that as is this training config will eventually diverge (though after starting to give good results).
+
+Batch size: 16, Learning rate: 2e-5, Gives decent results in ~750 steps
+
+| Batch Size | Gradient Accumulation Steps | Effective Total Batch Size | Memory Used |
+|------------|-----------------------------|------------------|-------------|
+|    16        |          1                   |     16             |      20.1 GB       |
+|    8        |          2                   |      16           |      15.6 GB       |
+|    1        |          16                   |     16            |      10.7 GB       |
+
+```sh
+# TODO - update model path
+accelerate launch training/training.py \
+    --output_dir <output path> \
+    --train_batch_size <batch size> \
+    --gradient_accumulation_steps <gradient accumulation steps> \
+    --learning_rate 2e-5 \
+    --use_8bit_adam \
+    --pretrained_model_name_or_path openMUSE/diffusers-pipeline-256-finetuned \
+    --instance_data_dataset  'm1guelpf/nouns' \
+    --image_key image \
+    --prompt_key text \
+    --resolution 256 \
+    --mixed_precision fp16 \
+    --lr_scheduler constant \
+    --validation_prompts \
+        'a pixel art character with square red glasses, a baseball-shaped head and a orange-colored body on a dark background' \
+        'a pixel art character with square orange glasses, a lips-shaped head and a red-colored body on a light background' \
+        'a pixel art character with square blue glasses, a microwave-shaped head and a purple-colored body on a sunny background' \
+        'a pixel art character with square red glasses, a baseball-shaped head and a blue-colored body on an orange background' \
+        'a pixel art character with square red glasses' \
+        'a pixel art character' \
+        'square red glasses on a pixel art character' \
+        'square red glasses on a pixel art character with a baseball-shaped head' \
+    --max_train_steps 10000 \
+    --checkpointing_steps 500 \
+    --validation_steps 250 \
+    --gradient_checkpointing
+```
+
+#### Full finetuning + lora
+
+Batch size: 16, Learning rate: 8e-4, Gives decent results in 1000-1250 steps
+
+| Batch Size | Gradient Accumulation Steps | Effective Total Batch Size | Memory Used |
+|------------|-----------------------------|------------------|-------------|
+|    16        |          1                   |     16             |      14.1 GB       |
+|    8        |          2                   |      16           |      10.1 GB       |
+|    1        |          16                   |     16            |      6.5 GB       |
+
+```sh
+# TODO - update model path
+accelerate launch training/training.py \
+    --output_dir <output path> \
+    --train_batch_size <batch size> \
+    --gradient_accumulation_steps <gradient accumulation steps> \
+    --learning_rate 8e-4 \
+    --use_lora \
+    --pretrained_model_name_or_path openMUSE/diffusers-pipeline-256-finetuned \
+    --instance_data_dataset  'm1guelpf/nouns' \
+    --image_key image \
+    --prompt_key text \
+    --resolution 256 \
+    --mixed_precision fp16 \
+    --lr_scheduler constant \
+    --validation_prompts \
+        'a pixel art character with square red glasses, a baseball-shaped head and a orange-colored body on a dark background' \
+        'a pixel art character with square orange glasses, a lips-shaped head and a red-colored body on a light background' \
+        'a pixel art character with square blue glasses, a microwave-shaped head and a purple-colored body on a sunny background' \
+        'a pixel art character with square red glasses, a baseball-shaped head and a blue-colored body on an orange background' \
+        'a pixel art character with square red glasses' \
+        'a pixel art character' \
+        'square red glasses on a pixel art character' \
+        'square red glasses on a pixel art character with a baseball-shaped head' \
+    --max_train_steps 10000 \
+    --checkpointing_steps 500 \
+    --validation_steps 250 \
+    --gradient_checkpointing
+```
+
+### Finetuning the 512 checkpoint
+
+These examples finetune on this [minecraft](https://huggingface.co/monadical-labs/minecraft-preview) dataset.
+
+Some example results:
+
+![minecraft1](./assets/minecraft1.png) ![minecraft2](./assets/minecraft2.png) ![minecraft3](./assets/minecraft3.png)
+
+#### Full finetuning
+
+Batch size: 8, Learning rate: 8e-5, Gives decent results in 500-1000 steps
+
+| Batch Size | Gradient Accumulation Steps | Effective Total Batch Size | Memory Used |
+|------------|-----------------------------|------------------|-------------|
+|    8        |          1                   |     8             |      24.2 GB       |
+|    4        |          2                   |     8             |      19.7 GB       |
+|    1        |          8                   |     8             |      16.99 GB       |
+
+```sh
+# TODO - update model path
+accelerate launch training/training.py \
+    --output_dir <output path> \
+    --train_batch_size <batch size> \
+    --gradient_accumulation_steps <gradient accumulation steps> \
+    --learning_rate 8e-5 \
+    --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
+    --instance_data_dataset  'monadical-labs/minecraft-preview' \
+    --image_key image \
+    --prompt_key text \
+    --resolution 512 \
+    --mixed_precision fp16 \
+    --lr_scheduler constant \
+    --validation_prompts \
+        'minecraft Avatar' \
+        'minecraft character' \
+        'minecraft' \
+        'minecraft president' \
+        'minecraft pig' \
+    --max_train_steps 10000 \
+    --checkpointing_steps 500 \
+    --validation_steps 250 \
+    --gradient_checkpointing
+```
+
+#### Full finetuning + 8 bit adam
+
+Batch size: 8, Learning rate: 5e-6, Gives decent results in 500-1000 steps
+
+| Batch Size | Gradient Accumulation Steps | Effective Total Batch Size | Memory Used |
+|------------|-----------------------------|------------------|-------------|
+|    8        |          1                   |     8             |      21.2 GB       |
+|    4        |          2                   |     8             |      13.3 GB       |
+|    1        |          8                   |     8             |      9.9 GB       |
+
+```sh
+# TODO - update model path
+accelerate launch training/training.py \
+    --output_dir <output path> \
+    --train_batch_size <batch size> \
+    --gradient_accumulation_steps <gradient accumulation steps> \
+    --learning_rate 5e-6 \
+    --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
+    --instance_data_dataset  'monadical-labs/minecraft-preview' \
+    --image_key image \
+    --prompt_key text \
+    --resolution 512 \
+    --mixed_precision fp16 \
+    --lr_scheduler constant \
+    --validation_prompts \
+        'minecraft Avatar' \
+        'minecraft character' \
+        'minecraft' \
+        'minecraft president' \
+        'minecraft pig' \
+    --max_train_steps 10000 \
+    --checkpointing_steps 500 \
+    --validation_steps 250 \
+    --gradient_checkpointing
+```
+
+#### Full finetuning + lora 
+
+Batch size: 8, Learning rate: 1e-4, Gives decent results in 500-1000 steps
+
+| Batch Size | Gradient Accumulation Steps | Effective Total Batch Size | Memory Used |
+|------------|-----------------------------|------------------|-------------|
+|    8        |          1                   |     8             |      12.7 GB       |
+|    4        |          2                   |     8             |      9.0 GB       |
+|    1        |          8                   |     8             |      5.6 GB       |
+
+```sh
+# TODO - update model path
+accelerate launch training/training.py \
+    --output_dir <output path> \
+    --train_batch_size <batch size> \
+    --gradient_accumulation_steps <gradient accumulation steps> \
+    --learning_rate 1e-4 \
+    --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
+    --instance_data_dataset  'monadical-labs/minecraft-preview' \
+    --image_key image \
+    --prompt_key text \
+    --resolution 512 \
+    --mixed_precision fp16 \
+    --lr_scheduler constant \
+    --validation_prompts \
+        'minecraft Avatar' \
+        'minecraft character' \
+        'minecraft' \
+        'minecraft president' \
+        'minecraft pig' \
+    --max_train_steps 10000 \
+    --checkpointing_steps 500 \
+    --validation_steps 250 \
+    --gradient_checkpointing
+```
+
+
 ### Styledrop
 
 [Styledrop](https://arxiv.org/abs/2306.00983) is an efficient finetuning method for learning a new style.

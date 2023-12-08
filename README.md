@@ -257,7 +257,7 @@ All training examples use fp16 mixed precision and gradient checkpointing. We do
 
 These examples finetune on this [nouns](https://huggingface.co/datasets/m1guelpf/nouns) dataset.
 
-Some example results:
+Example results:
 
 ![noun1](./assets/noun1.png) ![noun2](./assets/noun2.png) ![noun3](./assets/noun3.png)
 
@@ -386,7 +386,7 @@ accelerate launch training/training.py \
 
 These examples finetune on this [minecraft](https://huggingface.co/monadical-labs/minecraft-preview) dataset.
 
-Some example results:
+Example results:
 
 ![minecraft1](./assets/minecraft1.png) ![minecraft2](./assets/minecraft2.png) ![minecraft3](./assets/minecraft3.png)
 

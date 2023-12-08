@@ -528,6 +528,8 @@ def main(args):
                 model_config=model.config,
             )
 
+    # TODO - this will save the lora weights in the peft format. We want to save in
+    # diffusers format
     def save_model_hook(models, weights, output_dir):
         if accelerator.is_main_process:
             for model in models:

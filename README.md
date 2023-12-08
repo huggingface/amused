@@ -409,6 +409,7 @@ accelerate launch training/training.py \
     --learning_rate 8e-5 \
     --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
     --instance_data_dataset  'monadical-labs/minecraft-preview' \
+    --prompt_prefix 'minecraft ' \
     --image_key image \
     --prompt_key text \
     --resolution 512 \
@@ -445,6 +446,7 @@ accelerate launch training/training.py \
     --learning_rate 5e-6 \
     --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
     --instance_data_dataset  'monadical-labs/minecraft-preview' \
+    --prompt_prefix 'minecraft ' \
     --image_key image \
     --prompt_key text \
     --resolution 512 \
@@ -481,6 +483,7 @@ accelerate launch training/training.py \
     --learning_rate 1e-4 \
     --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
     --instance_data_dataset  'monadical-labs/minecraft-preview' \
+    --prompt_prefix 'minecraft ' \
     --image_key image \
     --prompt_key text \
     --resolution 512 \
@@ -497,7 +500,6 @@ accelerate launch training/training.py \
     --validation_steps 250 \
     --gradient_checkpointing
 ```
-
 
 ### Styledrop
 

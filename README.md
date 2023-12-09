@@ -10,7 +10,9 @@
 | [amused-256](https://huggingface.co/huggingface/amused-256) | 603M |
 | [amused-512](https://huggingface.co/huggingface/amused-512) | 608M |
 
-TODO - why/where to use amused
+Amused is a lightweight text to image model based off of the [muse](https://arxiv.org/pdf/2301.00704.pdf) architecture. Amused is particularly useful in applications that require a lightweight and fast model such as generating many images quickly at once.
+
+Amused is a vqvae token based transformer that can generate an image in fewer forward passes than many diffusion models. In contrast with muse, it uses the smaller text encoder clip instead of t5. Due to its small parameter count and few forward pass generation process, amused can generate many images quickly. This benefit is seen particularly at larger batch sizes. 
 
 ## 1. Usage
 

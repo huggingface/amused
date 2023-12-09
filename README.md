@@ -3,10 +3,7 @@
 ![collage](./assets/collage_small.png)
 <sup><sub>Images cherry-picked from 512 and 256 models. Images are degraded to load faster. See ./assets/collage_full.png for originals</sub></sup>
 
-[[Paper]]()
-[[Models]]()
-[[Colab]]()
-[[Training Code]]()
+[[Paper - TODO]]()
 
 | Model | Params |
 |-------|--------|
@@ -26,8 +23,8 @@ import torch
 from diffusers import AmusedPipeline
 
 pipe = AmusedPipeline.from_pretrained(
-    "openMUSE/diffusers-pipeline-256-finetuned", torch_dtype=torch.float16
-)  # TODO - fix path
+    "huggingface/amused-256", torch_dtype=torch.float16
+)
 pipe.vqvae.to(torch.float32)  # TODO - vqvae is producing nans in fp16
 pipe = pipe.to("cuda")
 
@@ -45,8 +42,8 @@ import torch
 from diffusers import AmusedPipeline
 
 pipe = AmusedPipeline.from_pretrained(
-    "openMUSE/diffusers-pipeline", torch_dtype=torch.float16
-)  # TODO - fix path
+    "huggingface/amused-512", torch_dtype=torch.float16
+)
 pipe.vqvae.to(torch.float32)  # TODO - vqvae is producing nans n fp16
 pipe = pipe.to("cuda")
 
@@ -67,8 +64,8 @@ from diffusers import AmusedImg2ImgPipeline
 from diffusers.utils import load_image
 
 pipe = AmusedImg2ImgPipeline.from_pretrained(
-    "openMUSE/diffusers-pipeline-256-finetuned", torch_dtype=torch.float16
-)  # TODO - fix path
+    "huggingface/amused-256", torch_dtype=torch.float16
+)
 pipe.vqvae.to(torch.float32)  # TODO - vqvae is producing nans in fp16
 pipe = pipe.to("cuda")
 
@@ -95,8 +92,8 @@ from diffusers import AmusedImg2ImgPipeline
 from diffusers.utils import load_image
 
 pipe = AmusedImg2ImgPipeline.from_pretrained(
-    "openMUSE/diffusers-pipeline", torch_dtype=torch.float16
-)  # TODO - fix path
+    "huggingface/amused-512", torch_dtype=torch.float16
+)
 pipe.vqvae.to(torch.float32)  # TODO - vqvae is producing nans in fp16
 pipe = pipe.to("cuda")
 
@@ -126,8 +123,8 @@ from diffusers.utils import load_image
 from PIL import Image
 
 pipe = AmusedInpaintPipeline.from_pretrained(
-    "openMUSE/diffusers-pipeline-256-finetuned", torch_dtype=torch.float16
-)  # TODO - fix path
+    "huggingface/amused-256", torch_dtype=torch.float16
+)
 pipe.vqvae.to(torch.float32)  # TODO - vqvae is producing nans with this example when in fp16
 pipe = pipe.to("cuda")
 
@@ -163,8 +160,8 @@ from diffusers import AmusedInpaintPipeline
 from diffusers.utils import load_image
 
 pipe = AmusedInpaintPipeline.from_pretrained(
-    "openMUSE/diffusers-pipeline", torch_dtype=torch.float16
-)  # TODO - fix path
+    "huggingface/amused-512", torch_dtype=torch.float16
+)
 pipe.vqvae.to(torch.float32)  # TODO - vqvae is producing nans with this example when in fp16
 pipe = pipe.to("cuda")
 
@@ -231,8 +228,8 @@ import torch
 from diffusers import AmusedPipeline
 
 pipe = AmusedPipeline.from_pretrained(
-    "openMUSE/diffusers-pipeline-256-finetuned", torch_dtype=torch.float16
-)  # TODO - fix path
+    "huggingface/amused-256", torch_dtype=torch.float16
+)
 
 # HERE use torch.compile
 pipe.transformer = torch.compile(pipe.transformer)
@@ -270,13 +267,12 @@ Batch size: 8, Learning rate: 1e-4, Gives decent results in 750-1000 steps
 |    1        |          8                   |     8             |      17.9 GB       |
 
 ```sh
-# TODO - update model path
 accelerate launch training/training.py \
     --output_dir <output path> \
     --train_batch_size <batch size> \
     --gradient_accumulation_steps <gradient accumulation steps> \
     --learning_rate 1e-4 \
-    --pretrained_model_name_or_path openMUSE/diffusers-pipeline-256-finetuned \
+    --pretrained_model_name_or_path huggingface/amused-256 \
     --instance_data_dataset  'm1guelpf/nouns' \
     --image_key image \
     --prompt_key text \
@@ -311,14 +307,13 @@ Batch size: 16, Learning rate: 2e-5, Gives decent results in ~750 steps
 |    1        |          16                   |     16            |      10.7 GB       |
 
 ```sh
-# TODO - update model path
 accelerate launch training/training.py \
     --output_dir <output path> \
     --train_batch_size <batch size> \
     --gradient_accumulation_steps <gradient accumulation steps> \
     --learning_rate 2e-5 \
     --use_8bit_adam \
-    --pretrained_model_name_or_path openMUSE/diffusers-pipeline-256-finetuned \
+    --pretrained_model_name_or_path huggingface/amused-256 \
     --instance_data_dataset  'm1guelpf/nouns' \
     --image_key image \
     --prompt_key text \
@@ -351,14 +346,13 @@ Batch size: 16, Learning rate: 8e-4, Gives decent results in 1000-1250 steps
 |    1        |          16                   |     16            |      6.5 GB       |
 
 ```sh
-# TODO - update model path
 accelerate launch training/training.py \
     --output_dir <output path> \
     --train_batch_size <batch size> \
     --gradient_accumulation_steps <gradient accumulation steps> \
     --learning_rate 8e-4 \
     --use_lora \
-    --pretrained_model_name_or_path openMUSE/diffusers-pipeline-256-finetuned \
+    --pretrained_model_name_or_path huggingface/amused-256 \
     --instance_data_dataset  'm1guelpf/nouns' \
     --image_key image \
     --prompt_key text \
@@ -399,13 +393,12 @@ Batch size: 8, Learning rate: 8e-5, Gives decent results in 500-1000 steps
 |    1        |          8                   |     8             |      16.99 GB       |
 
 ```sh
-# TODO - update model path
 accelerate launch training/training.py \
     --output_dir <output path> \
     --train_batch_size <batch size> \
     --gradient_accumulation_steps <gradient accumulation steps> \
     --learning_rate 8e-5 \
-    --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
+    --pretrained_model_name_or_path huggingface/amused-512 \
     --instance_data_dataset  'monadical-labs/minecraft-preview' \
     --prompt_prefix 'minecraft ' \
     --image_key image \
@@ -436,13 +429,12 @@ Batch size: 8, Learning rate: 5e-6, Gives decent results in 500-1000 steps
 |    1        |          8                   |     8             |      9.9 GB       |
 
 ```sh
-# TODO - update model path
 accelerate launch training/training.py \
     --output_dir <output path> \
     --train_batch_size <batch size> \
     --gradient_accumulation_steps <gradient accumulation steps> \
     --learning_rate 5e-6 \
-    --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
+    --pretrained_model_name_or_path huggingface/amused-512 \
     --instance_data_dataset  'monadical-labs/minecraft-preview' \
     --prompt_prefix 'minecraft ' \
     --image_key image \
@@ -473,13 +465,12 @@ Batch size: 8, Learning rate: 1e-4, Gives decent results in 500-1000 steps
 |    1        |          8                   |     8             |      5.6 GB       |
 
 ```sh
-# TODO - update model path
 accelerate launch training/training.py \
     --output_dir <output path> \
     --train_batch_size <batch size> \
     --gradient_accumulation_steps <gradient accumulation steps> \
     --learning_rate 1e-4 \
-    --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
+    --pretrained_model_name_or_path huggingface/amused-512 \
     --instance_data_dataset  'monadical-labs/minecraft-preview' \
     --prompt_prefix 'minecraft ' \
     --image_key image \
@@ -515,13 +506,12 @@ Example results:
 Learning rate: 4e-4, Gives decent results in 1500-2000 steps
 
 ```sh
-# TODO - update model path
 accelerate launch ./training/training.py \
     --output_dir <output path> \
     --mixed_precision fp16 \
     --report_to wandb \
     --use_lora \
-    --pretrained_model_name_or_path openMUSE/diffusers-pipeline-256-finetuned \
+    --pretrained_model_name_or_path huggingface/amused-256 \
     --train_batch_size 1 \
     --lr_scheduler constant \
     --learning_rate 4e-4 \
@@ -551,7 +541,7 @@ accelerate launch ./training/training.py \
     --mixed_precision fp16 \
     --report_to wandb \
     --use_lora \
-    --pretrained_model_name_or_path openMUSE/diffusers-pipeline \
+    --pretrained_model_name_or_path huggingface/amused-512 \
     --train_batch_size 1 \
     --lr_scheduler constant \
     --learning_rate 1e-3 \

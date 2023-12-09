@@ -10,8 +10,8 @@
 
 | Model | Params |
 |-------|--------|
-| TODO - update [amused-256](https://huggingface.co/openMUSE/diffusers-pipeline-256-finetuned) | 603M |
-| TODO - update [amused-512](https://huggingface.co/openMUSE/diffusers-pipeline) | 608M |
+| [amused-256](https://huggingface.co/huggingface/amused-256) | 603M |
+| [amused-512](https://huggingface.co/huggingface/amused-512) | 608M |
 
 TODO - why/where to use amused
 

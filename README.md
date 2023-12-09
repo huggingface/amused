@@ -25,9 +25,9 @@ import torch
 from diffusers import AmusedPipeline
 
 pipe = AmusedPipeline.from_pretrained(
-    "huggingface/amused-256", torch_dtype=torch.float16
+    "huggingface/amused-256", variant="fp16", torch_dtype=torch.float16
 )
-pipe.vqvae.to(torch.float32)  # TODO - vqvae is producing nans in fp16
+pipe.vqvae.to(torch.float32)  # vqvae is producing nans in fp16
 pipe = pipe.to("cuda")
 
 prompt = "cowboy"
@@ -44,9 +44,9 @@ import torch
 from diffusers import AmusedPipeline
 
 pipe = AmusedPipeline.from_pretrained(
-    "huggingface/amused-512", torch_dtype=torch.float16
+    "huggingface/amused-512", variant="fp16", torch_dtype=torch.float16
 )
-pipe.vqvae.to(torch.float32)  # TODO - vqvae is producing nans n fp16
+pipe.vqvae.to(torch.float32)  # vqvae is producing nans n fp16
 pipe = pipe.to("cuda")
 
 prompt = "summer in the mountains"
@@ -66,9 +66,9 @@ from diffusers import AmusedImg2ImgPipeline
 from diffusers.utils import load_image
 
 pipe = AmusedImg2ImgPipeline.from_pretrained(
-    "huggingface/amused-256", torch_dtype=torch.float16
+    "huggingface/amused-256", variant="fp16", torch_dtype=torch.float16
 )
-pipe.vqvae.to(torch.float32)  # TODO - vqvae is producing nans in fp16
+pipe.vqvae.to(torch.float32)  # vqvae is producing nans in fp16
 pipe = pipe.to("cuda")
 
 prompt = "apple watercolor"
@@ -94,9 +94,9 @@ from diffusers import AmusedImg2ImgPipeline
 from diffusers.utils import load_image
 
 pipe = AmusedImg2ImgPipeline.from_pretrained(
-    "huggingface/amused-512", torch_dtype=torch.float16
+    "huggingface/amused-512", variant="fp16", torch_dtype=torch.float16
 )
-pipe.vqvae.to(torch.float32)  # TODO - vqvae is producing nans in fp16
+pipe.vqvae.to(torch.float32)  # vqvae is producing nans in fp16
 pipe = pipe.to("cuda")
 
 prompt = "winter mountains"
@@ -125,9 +125,9 @@ from diffusers.utils import load_image
 from PIL import Image
 
 pipe = AmusedInpaintPipeline.from_pretrained(
-    "huggingface/amused-256", torch_dtype=torch.float16
+    "huggingface/amused-256", variant="fp16", torch_dtype=torch.float16
 )
-pipe.vqvae.to(torch.float32)  # TODO - vqvae is producing nans with this example when in fp16
+pipe.vqvae.to(torch.float32)  # vqvae is producing nans in fp16
 pipe = pipe.to("cuda")
 
 prompt = "a man with glasses"
@@ -162,9 +162,9 @@ from diffusers import AmusedInpaintPipeline
 from diffusers.utils import load_image
 
 pipe = AmusedInpaintPipeline.from_pretrained(
-    "huggingface/amused-512", torch_dtype=torch.float16
+    "huggingface/amused-512", variant="fp16", torch_dtype=torch.float16
 )
-pipe.vqvae.to(torch.float32)  # TODO - vqvae is producing nans with this example when in fp16
+pipe.vqvae.to(torch.float32)  # vqvae is producing nans in fp16
 pipe = pipe.to("cuda")
 
 prompt = "fall mountains"
@@ -230,13 +230,13 @@ import torch
 from diffusers import AmusedPipeline
 
 pipe = AmusedPipeline.from_pretrained(
-    "huggingface/amused-256", torch_dtype=torch.float16
+    "huggingface/amused-256", variant="fp16", torch_dtype=torch.float16
 )
 
 # HERE use torch.compile
 pipe.transformer = torch.compile(pipe.transformer)
 
-pipe.vqvae.to(torch.float32)  # TODO - vqvae is producing nans in fp16
+pipe.vqvae.to(torch.float32)  # vqvae is producing nans in fp16
 pipe = pipe.to("cuda")
 
 prompt = "cowboy"

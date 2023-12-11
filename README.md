@@ -269,7 +269,7 @@ Batch size: 8, Learning rate: 1e-4, Gives decent results in 750-1000 steps
 |    1        |          8                   |     8             |      17.9 GB       |
 
 ```sh
-accelerate launch training/training.py \
+accelerate launch training/train_amused.py \
     --output_dir <output path> \
     --train_batch_size <batch size> \
     --gradient_accumulation_steps <gradient accumulation steps> \
@@ -309,7 +309,7 @@ Batch size: 16, Learning rate: 2e-5, Gives decent results in ~750 steps
 |    1        |          16                   |     16            |      10.7 GB       |
 
 ```sh
-accelerate launch training/training.py \
+accelerate launch training/train_amused.py \
     --output_dir <output path> \
     --train_batch_size <batch size> \
     --gradient_accumulation_steps <gradient accumulation steps> \
@@ -348,7 +348,7 @@ Batch size: 16, Learning rate: 8e-4, Gives decent results in 1000-1250 steps
 |    1        |          16                   |     16            |      6.5 GB       |
 
 ```sh
-accelerate launch training/training.py \
+accelerate launch training/train_amused.py \
     --output_dir <output path> \
     --train_batch_size <batch size> \
     --gradient_accumulation_steps <gradient accumulation steps> \
@@ -395,7 +395,7 @@ Batch size: 8, Learning rate: 8e-5, Gives decent results in 500-1000 steps
 |    1        |          8                   |     8             |      16.99 GB       |
 
 ```sh
-accelerate launch training/training.py \
+accelerate launch training/train_amused.py \
     --output_dir <output path> \
     --train_batch_size <batch size> \
     --gradient_accumulation_steps <gradient accumulation steps> \
@@ -431,7 +431,7 @@ Batch size: 8, Learning rate: 5e-6, Gives decent results in 500-1000 steps
 |    1        |          8                   |     8             |      9.9 GB       |
 
 ```sh
-accelerate launch training/training.py \
+accelerate launch training/train_amused.py \
     --output_dir <output path> \
     --train_batch_size <batch size> \
     --gradient_accumulation_steps <gradient accumulation steps> \
@@ -467,7 +467,7 @@ Batch size: 8, Learning rate: 1e-4, Gives decent results in 500-1000 steps
 |    1        |          8                   |     8             |      5.6 GB       |
 
 ```sh
-accelerate launch training/training.py \
+accelerate launch training/train_amused.py \
     --output_dir <output path> \
     --train_batch_size <batch size> \
     --gradient_accumulation_steps <gradient accumulation steps> \
@@ -511,7 +511,7 @@ Learning rate: 4e-4, Gives decent results in 1500-2000 steps
 Memory used: 6.5 GB 
 
 ```sh
-accelerate launch ./training/training.py \
+accelerate launch ./training/train_amused.py \
     --output_dir <output path> \
     --mixed_precision fp16 \
     --report_to wandb \
@@ -543,7 +543,7 @@ Learning rate: 1e-3, Lora alpha 1, Gives decent results in 1500-2000 steps
 Memory used: 5.6 GB 
 
 ```
-accelerate launch ./training/training.py \
+accelerate launch ./training/train_amused.py \
     --output_dir <output path> \
     --mixed_precision fp16 \
     --report_to wandb \

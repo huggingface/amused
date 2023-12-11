@@ -13,22 +13,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from contextlib import nullcontext
 import argparse
 import copy
 import logging
 import math
 import os
 import shutil
+from contextlib import nullcontext
 from pathlib import Path
-from datasets import load_dataset
 
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
-from peft import LoraConfig, PeftModel, get_peft_model
+from datasets import load_dataset
+from peft import LoraConfig
+from peft.utils import get_peft_model_state_dict
 from PIL import Image
 from PIL.ImageOps import exif_transpose
 from torch.utils.data import DataLoader, Dataset, default_collate
@@ -40,6 +41,7 @@ from transformers import (
 
 import diffusers.optimization
 from diffusers import AmusedPipeline, AmusedScheduler, EMAModel, UVit2DModel, VQModel
+from diffusers.loaders import LoraLoaderMixin
 from diffusers.utils import is_wandb_available
 
 
@@ -86,11 +88,7 @@ def parse_args():
         help="A folder containing the training data of instance images.",
     )
     parser.add_argument(
-        "--instance_data_image",
-        type=str,
-        default=None,
-        required=False,
-        help="A single training image"
+        "--instance_data_image", type=str, default=None, required=False, help="A single training image"
     )
     parser.add_argument(
         "--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes."
@@ -233,7 +231,7 @@ def parse_args():
     parser.add_argument(
         "--report_to",
         type=str,
-        default="tensorboard",
+        default="wandb",
         help=(
             'The integration to report the results and logs to. Supported platforms are `"tensorboard"`'
             ' (default), `"wandb"` and `"comet_ml"`. Use `"all"` to report to all integrations.'
@@ -253,10 +251,14 @@ def parse_args():
     parser.add_argument("--min_masking_rate", type=float, default=0.0)
     parser.add_argument("--cond_dropout_prob", type=float, default=0.0)
     parser.add_argument("--max_grad_norm", default=None, type=float, help="Max gradient norm.", required=False)
-    parser.add_argument("--use_lora", action="store_true", help="TODO")
+    parser.add_argument("--use_lora", action="store_true", help="Fine tune the model using LoRa")
+    parser.add_argument("--text_encoder_use_lora", action="store_true", help="Fine tune the model using LoRa")
     parser.add_argument("--lora_r", default=16, type=int)
     parser.add_argument("--lora_alpha", default=32, type=int)
     parser.add_argument("--lora_target_modules", default=["to_q", "to_k", "to_v"], type=str, nargs="+")
+    parser.add_argument("--text_encoder_lora_r", default=16, type=int)
+    parser.add_argument("--text_encoder_lora_alpha", default=32, type=int)
+    parser.add_argument("--text_encoder_lora_target_modules", default=["to_q", "to_k", "to_v"], type=str, nargs="+")
     parser.add_argument("--train_text_encoder", action="store_true")
     parser.add_argument("--image_key", type=str, required=False)
     parser.add_argument("--prompt_key", type=str, required=False)
@@ -273,10 +275,14 @@ def parse_args():
         if not is_wandb_available():
             raise ImportError("Make sure to install wandb if you want to use it for logging during training.")
 
-    num_datasources = sum([x is not None for x in [args.instance_data_dir, args.instance_data_image, args.instance_data_dataset]])
+    num_datasources = sum(
+        [x is not None for x in [args.instance_data_dir, args.instance_data_image, args.instance_data_dataset]]
+    )
 
     if num_datasources != 1:
-        raise ValueError("provide one and only one of `--instance_data_dir`, `--instance_data_image`, or `--instance_data_dataset`")
+        raise ValueError(
+            "provide one and only one of `--instance_data_dir`, `--instance_data_image`, or `--instance_data_dataset`"
+        )
 
     if args.instance_data_dir is not None:
         if not os.path.exists(args.instance_data_dir):
@@ -290,6 +296,7 @@ def parse_args():
         raise ValueError("`--instance_data_dataset` requires setting `--image_key` and `--prompt_key`")
 
     return args
+
 
 class InstanceDataRootDataset(Dataset):
     def __init__(
@@ -314,6 +321,7 @@ class InstanceDataRootDataset(Dataset):
         rv["prompt_input_ids"] = tokenize_prompt(self.tokenizer, prompt)[0]
         return rv
 
+
 class InstanceDataImageDataset(Dataset):
     def __init__(
         self,
@@ -331,6 +339,7 @@ class InstanceDataImageDataset(Dataset):
 
     def __getitem__(self, index):
         return self.value
+
 
 class HuggingFaceDataset(Dataset):
     def __init__(
@@ -366,6 +375,7 @@ class HuggingFaceDataset(Dataset):
 
         return rv
 
+
 def process_image(image, size):
     image = exif_transpose(image)
 
@@ -383,16 +393,11 @@ def process_image(image, size):
     image = transforms.ToTensor()(image)
 
     micro_conds = torch.tensor(
-        [
-            orig_width,
-            orig_height,
-            c_top,
-            c_left,
-            6.0
-        ],
+        [orig_width, orig_height, c_top, c_left, 6.0],
     )
 
     return {"image": image, "micro_conds": micro_conds}
+
 
 @torch.no_grad()
 def tokenize_prompt(tokenizer, prompt):
@@ -403,6 +408,7 @@ def tokenize_prompt(tokenizer, prompt):
         max_length=77,
         return_tensors="pt",
     ).input_ids
+
 
 def encode_prompt(text_encoder, input_ids):
     outputs = text_encoder(input_ids, return_dict=True, output_hidden_states=True)
@@ -443,25 +449,6 @@ def main(args):
     if args.seed is not None:
         set_seed(args.seed)
 
-    resume_from_checkpoint = args.resume_from_checkpoint
-    if resume_from_checkpoint:
-        if resume_from_checkpoint == "latest":
-            # Get the most recent checkpoint
-            dirs = os.listdir(args.output_dir)
-            dirs = [d for d in dirs if d.startswith("checkpoint")]
-            dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
-            if len(dirs) > 0:
-                resume_from_checkpoint = os.path.join(args.output_dir, dirs[-1])
-            else:
-                resume_from_checkpoint = None
-
-        if resume_from_checkpoint is None:
-            accelerator.print(
-                f"Checkpoint '{args.resume_from_checkpoint}' does not exist. Starting a new training run."
-            )
-        else:
-            accelerator.print(f"Resuming from checkpoint {resume_from_checkpoint}")
-
     # TODO - will have to fix loading if training text encoder
     text_encoder = CLIPTextModelWithProjection.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant
@@ -474,6 +461,13 @@ def main(args):
     )
 
     if args.train_text_encoder:
+        if args.text_encoder_use_lora:
+            lora_config = LoraConfig(
+                r=args.text_encoder_lora_r,
+                lora_alpha=args.text_encoder_lora_alpha,
+                target_modules=args.text_encoder_lora_target_modules,
+            )
+            text_encoder.add_adapter(lora_config)
         text_encoder.train()
         text_encoder.requires_grad_(True)
     else:
@@ -482,32 +476,20 @@ def main(args):
 
     vq_model.requires_grad_(False)
 
-    if args.use_lora:
-        model = UVit2DModel.from_pretrained(
-            args.pretrained_model_name_or_path, subfolder="transformer", revision=args.revision, variant=args.variant
-        )
+    model = UVit2DModel.from_pretrained(
+        args.pretrained_model_name_or_path,
+        subfolder="transformer",
+        revision=args.revision,
+        variant=args.variant,
+    )
 
-        if resume_from_checkpoint is not None:
-            model = PeftModel.from_pretrained(
-                model, os.path.join(resume_from_checkpoint, "transformer"), is_trainable=True
-            )
-        else:
-            lora_config = LoraConfig(
-                r=args.lora_r,
-                lora_alpha=args.lora_alpha,
-                target_modules=args.lora_target_modules,
-            )
-            model = get_peft_model(model, lora_config)
-    else:
-        if resume_from_checkpoint is not None:
-            model = UVit2DModel.from_pretrained(resume_from_checkpoint, subfolder="transformer")
-        else:
-            model = UVit2DModel.from_pretrained(
-                args.pretrained_model_name_or_path,
-                subfolder="transformer",
-                revision=args.revision,
-                variant=args.variant,
-            )
+    if args.use_lora:
+        lora_config = LoraConfig(
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            target_modules=args.lora_target_modules,
+        )
+        model.add_adapter(lora_config)
 
     model.train()
 
@@ -517,37 +499,83 @@ def main(args):
             text_encoder.gradient_checkpointing_enable()
 
     if args.use_ema:
-        if resume_from_checkpoint is not None:
-            ema = EMAModel.from_pretrained(os.path.join(resume_from_checkpoint, "ema_model"), model_cls=UVit2DModel)
-        else:
-            ema = EMAModel(
-                model.parameters(),
-                decay=args.ema_decay,
-                update_after_step=args.ema_update_after_step,
-                model_cls=UVit2DModel,
-                model_config=model.config,
-            )
+        ema = EMAModel(
+            model.parameters(),
+            decay=args.ema_decay,
+            update_after_step=args.ema_update_after_step,
+            model_cls=UVit2DModel,
+            model_config=model.config,
+        )
 
-    # TODO - this will save the lora weights in the peft format. We want to save in
-    # diffusers format
     def save_model_hook(models, weights, output_dir):
         if accelerator.is_main_process:
-            for model in models:
-                if isinstance(model, UVit2DModel):
-                    models[0].save_pretrained(os.path.join(output_dir, "transformer"))
-                elif isinstance(model, CLIPTextModelWithProjection):
-                    models[0].save_pretrained(os.path.join(output_dir, "text_encoder"))
+            transformer_lora_layers_to_save = None
+            text_encoder_lora_layers_to_save = None
 
+            for model_ in models:
+                if isinstance(model_, type(accelerator.unwrap_model(model))):
+                    if args.use_lora:
+                        transformer_lora_layers_to_save = get_peft_model_state_dict(model_)
+                    else:
+                        model_.save_pretrained(os.path.join(output_dir, "transformer"))
+                elif isinstance(model_, type(accelerator.unwrap_model(text_encoder))):
+                    if args.text_encoder_use_lora:
+                        text_encoder_lora_layers_to_save = get_peft_model_state_dict(model_)
+                    else:
+                        model_.save_pretrained(os.path.join(output_dir, "text_encoder"))
+                else:
+                    raise ValueError(f"unexpected save model: {model_.__class__}")
+
+                # make sure to pop weight so that corresponding model is not saved again
                 weights.pop()
+
+            if transformer_lora_layers_to_save is not None or text_encoder_lora_layers_to_save is not None:
+                LoraLoaderMixin.save_lora_weights(
+                    output_dir,
+                    transformer_lora_layers=transformer_lora_layers_to_save,
+                    text_encoder_lora_layers=text_encoder_lora_layers_to_save,
+                )
 
             if args.use_ema:
                 ema.save_pretrained(os.path.join(output_dir, "ema_model"))
 
     def load_model_hook(models, input_dir):
-        # All models are initially instantiated from the checkpoint and so
-        # don't have to be loaded in the accelerate hook
-        for _ in range(len(models)):
-            models.pop()
+        transformer = None
+        text_encoder_ = None
+
+        while len(models) > 0:
+            model_ = models.pop()
+
+            if isinstance(model_, type(accelerator.unwrap_model(model))):
+                if args.use_lora:
+                    transformer = model_
+                else:
+                    load_model = UVit2DModel.from_pretrained(os.path.join(input_dir, "transformer"))
+                    model_.load_state_dict(load_model.state_dict())
+                    del load_model
+            elif isinstance(model, type(accelerator.unwrap_model(text_encoder))):
+                if args.text_encoder_use_lora:
+                    text_encoder_ = model_
+                else:
+                    load_model = CLIPTextModelWithProjection.from_pretrained(os.path.join(input_dir, "text_encoder"))
+                    model_.load_state_dict(load_model.state_dict())
+                    del load_model
+            else:
+                raise ValueError(f"unexpected save model: {model.__class__}")
+
+        if transformer is not None or text_encoder_ is not None:
+            lora_state_dict, network_alphas = LoraLoaderMixin.lora_state_dict(input_dir)
+            LoraLoaderMixin.load_lora_into_text_encoder(
+                lora_state_dict, network_alphas=network_alphas, text_encoder=text_encoder_
+            )
+            LoraLoaderMixin.load_lora_into_transformer(
+                lora_state_dict, network_alphas=network_alphas, transformer=transformer
+            )
+
+        if args.use_ema:
+            load_from = EMAModel.from_pretrained(os.path.join(input_dir, "ema_model"), model_cls=UVit2DModel)
+            ema.load_state_dict(load_from.state_dict())
+            del load_from
 
     accelerator.register_load_state_pre_hook(load_model_hook)
     accelerator.register_save_state_pre_hook(save_model_hook)
@@ -582,7 +610,11 @@ def main(args):
         },
     ]
 
-    # TODO - does not actually take text encoder parameters
+    if args.train_text_encoder:
+        optimizer_grouped_parameters.append(
+            {"params": text_encoder.parameters(), "weight_decay": args.adam_weight_decay}
+        )
+
     optimizer = optimizer_cls(
         optimizer_grouped_parameters,
         lr=args.learning_rate,
@@ -631,8 +663,8 @@ def main(args):
     lr_scheduler = diffusers.optimization.get_scheduler(
         args.lr_scheduler,
         optimizer=optimizer,
-        num_training_steps=args.max_train_steps*accelerator.num_processes,
-        num_warmup_steps=args.lr_warmup_steps*accelerator.num_processes,
+        num_training_steps=args.max_train_steps * accelerator.num_processes,
+        num_warmup_steps=args.lr_warmup_steps * accelerator.num_processes,
     )
 
     logger.info("Preparing model, optimizer and dataloaders")
@@ -661,14 +693,18 @@ def main(args):
 
     if args.use_ema:
         ema.to(accelerator.device)
- 
+
     with nullcontext() if args.train_text_encoder else torch.no_grad():
-        empty_embeds, empty_clip_embeds = encode_prompt(text_encoder, tokenize_prompt(tokenizer, "").to(text_encoder.device, non_blocking=True))
+        empty_embeds, empty_clip_embeds = encode_prompt(
+            text_encoder, tokenize_prompt(tokenizer, "").to(text_encoder.device, non_blocking=True)
+        )
 
         # There is a single image, we can just pre-encode the single prompt
         if args.instance_data_image is not None:
             prompt = os.path.splitext(os.path.basename(args.instance_data_image))[0]
-            encoder_hidden_states, cond_embeds = encode_prompt(text_encoder, tokenize_prompt(tokenizer, prompt).to(text_encoder.device, non_blocking=True))
+            encoder_hidden_states, cond_embeds = encode_prompt(
+                text_encoder, tokenize_prompt(tokenizer, prompt).to(text_encoder.device, non_blocking=True)
+            )
             encoder_hidden_states = encoder_hidden_states.repeat(args.train_batch_size, 1, 1)
             cond_embeds = cond_embeds.repeat(args.train_batch_size, 1)
 
@@ -685,6 +721,25 @@ def main(args):
     logger.info(f"  Instantaneous batch size per device = { args.train_batch_size}")
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
+
+    resume_from_checkpoint = args.resume_from_checkpoint
+    if resume_from_checkpoint:
+        if resume_from_checkpoint == "latest":
+            # Get the most recent checkpoint
+            dirs = os.listdir(args.output_dir)
+            dirs = [d for d in dirs if d.startswith("checkpoint")]
+            dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
+            if len(dirs) > 0:
+                resume_from_checkpoint = os.path.join(args.output_dir, dirs[-1])
+            else:
+                resume_from_checkpoint = None
+
+        if resume_from_checkpoint is None:
+            accelerator.print(
+                f"Checkpoint '{args.resume_from_checkpoint}' does not exist. Starting a new training run."
+            )
+        else:
+            accelerator.print(f"Resuming from checkpoint {resume_from_checkpoint}")
 
     if resume_from_checkpoint is None:
         global_step = 0
@@ -754,10 +809,12 @@ def main(args):
                 vae_scale_factor = 2 ** (len(vq_model.config.block_out_channels) - 1)
                 resolution = args.resolution // vae_scale_factor
                 input_ids = input_ids.reshape(bs, resolution, resolution)
-                
+
             if "prompt_input_ids" in batch:
                 with nullcontext() if args.train_text_encoder else torch.no_grad():
-                    encoder_hidden_states, cond_embeds = encode_prompt(text_encoder, batch["prompt_input_ids"].to(accelerator.device, non_blocking=True))
+                    encoder_hidden_states, cond_embeds = encode_prompt(
+                        text_encoder, batch["prompt_input_ids"].to(accelerator.device, non_blocking=True)
+                    )
 
             # Train Step
             with accelerator.accumulate(model):
@@ -827,7 +884,7 @@ def main(args):
                         logger.info("Generating images...")
 
                         model.eval()
-                        
+
                         if args.train_text_encoder:
                             text_encoder.eval()
 

@@ -539,7 +539,7 @@ Example results:
 
 ```
 accelerate launch ./training/training.py \
-    --output_dir ../styledrop \
+    --output_dir <output path> \
     --mixed_precision fp16 \
     --report_to wandb \
     --use_lora \

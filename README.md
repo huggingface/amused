@@ -472,6 +472,7 @@ accelerate launch training/training.py \
     --train_batch_size <batch size> \
     --gradient_accumulation_steps <gradient accumulation steps> \
     --learning_rate 1e-4 \
+    --use_lora \
     --pretrained_model_name_or_path huggingface/amused-512 \
     --instance_data_dataset  'monadical-labs/minecraft-preview' \
     --prompt_prefix 'minecraft ' \
@@ -507,6 +508,8 @@ Example results:
 
 Learning rate: 4e-4, Gives decent results in 1500-2000 steps
 
+Memory used: 6.5 GB 
+
 ```sh
 accelerate launch ./training/training.py \
     --output_dir <output path> \
@@ -531,11 +534,13 @@ accelerate launch ./training/training.py \
 
 #### 512
 
-Learning rate: 1e-3, Lora alpha 1, Gives decent results in 1500-2000 steps
-
 Example results:
 
 ![glowing_512_1](./assets/glowing_512_1.png) ![glowing_512_2](./assets/glowing_512_2.png) ![glowing_512_3](./assets/glowing_512_3.png)
+
+Learning rate: 1e-3, Lora alpha 1, Gives decent results in 1500-2000 steps
+
+Memory used: 5.6 GB 
 
 ```
 accelerate launch ./training/training.py \

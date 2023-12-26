@@ -7,8 +7,8 @@
 
 | Model | Params |
 |-------|--------|
-| [amused-256](https://huggingface.co/huggingface/amused-256) | 603M |
-| [amused-512](https://huggingface.co/huggingface/amused-512) | 608M |
+| [amused-256](https://huggingface.co/amused/amused-256) | 603M |
+| [amused-512](https://huggingface.co/amused/amused-512) | 608M |
 
 Amused is a lightweight text to image model based off of the [muse](https://arxiv.org/pdf/2301.00704.pdf) architecture. Amused is particularly useful in applications that require a lightweight and fast model such as generating many images quickly at once.
 
@@ -25,7 +25,7 @@ import torch
 from diffusers import AmusedPipeline
 
 pipe = AmusedPipeline.from_pretrained(
-    "huggingface/amused-256", variant="fp16", torch_dtype=torch.float16
+    "amused/amused-256", variant="fp16", torch_dtype=torch.float16
 )
 pipe = pipe.to("cuda")
 
@@ -43,7 +43,7 @@ import torch
 from diffusers import AmusedPipeline
 
 pipe = AmusedPipeline.from_pretrained(
-    "huggingface/amused-512", variant="fp16", torch_dtype=torch.float16
+    "amused/amused-512", variant="fp16", torch_dtype=torch.float16
 )
 pipe = pipe.to("cuda")
 
@@ -64,7 +64,7 @@ from diffusers import AmusedImg2ImgPipeline
 from diffusers.utils import load_image
 
 pipe = AmusedImg2ImgPipeline.from_pretrained(
-    "huggingface/amused-256", variant="fp16", torch_dtype=torch.float16
+    "amused/amused-256", variant="fp16", torch_dtype=torch.float16
 )
 pipe = pipe.to("cuda")
 
@@ -91,7 +91,7 @@ from diffusers import AmusedImg2ImgPipeline
 from diffusers.utils import load_image
 
 pipe = AmusedImg2ImgPipeline.from_pretrained(
-    "huggingface/amused-512", variant="fp16", torch_dtype=torch.float16
+    "amused/amused-512", variant="fp16", torch_dtype=torch.float16
 )
 pipe = pipe.to("cuda")
 
@@ -121,7 +121,7 @@ from diffusers.utils import load_image
 from PIL import Image
 
 pipe = AmusedInpaintPipeline.from_pretrained(
-    "huggingface/amused-256", variant="fp16", torch_dtype=torch.float16
+    "amused/amused-256", variant="fp16", torch_dtype=torch.float16
 )
 pipe = pipe.to("cuda")
 
@@ -157,7 +157,7 @@ from diffusers import AmusedInpaintPipeline
 from diffusers.utils import load_image
 
 pipe = AmusedInpaintPipeline.from_pretrained(
-    "huggingface/amused-512", variant="fp16", torch_dtype=torch.float16
+    "amused/amused-512", variant="fp16", torch_dtype=torch.float16
 )
 pipe = pipe.to("cuda")
 
@@ -224,7 +224,7 @@ import torch
 from diffusers import AmusedPipeline
 
 pipe = AmusedPipeline.from_pretrained(
-    "huggingface/amused-256", variant="fp16", torch_dtype=torch.float16
+    "amused/amused-256", variant="fp16", torch_dtype=torch.float16
 )
 
 # HERE use torch.compile
@@ -267,7 +267,7 @@ accelerate launch training/train_amused.py \
     --train_batch_size <batch size> \
     --gradient_accumulation_steps <gradient accumulation steps> \
     --learning_rate 1e-4 \
-    --pretrained_model_name_or_path huggingface/amused-256 \
+    --pretrained_model_name_or_path amused/amused-256 \
     --instance_data_dataset  'm1guelpf/nouns' \
     --image_key image \
     --prompt_key text \
@@ -308,7 +308,7 @@ accelerate launch training/train_amused.py \
     --gradient_accumulation_steps <gradient accumulation steps> \
     --learning_rate 2e-5 \
     --use_8bit_adam \
-    --pretrained_model_name_or_path huggingface/amused-256 \
+    --pretrained_model_name_or_path amused/amused-256 \
     --instance_data_dataset  'm1guelpf/nouns' \
     --image_key image \
     --prompt_key text \
@@ -347,7 +347,7 @@ accelerate launch training/train_amused.py \
     --gradient_accumulation_steps <gradient accumulation steps> \
     --learning_rate 8e-4 \
     --use_lora \
-    --pretrained_model_name_or_path huggingface/amused-256 \
+    --pretrained_model_name_or_path amused/amused-256 \
     --instance_data_dataset  'm1guelpf/nouns' \
     --image_key image \
     --prompt_key text \
@@ -393,7 +393,7 @@ accelerate launch training/train_amused.py \
     --train_batch_size <batch size> \
     --gradient_accumulation_steps <gradient accumulation steps> \
     --learning_rate 8e-5 \
-    --pretrained_model_name_or_path huggingface/amused-512 \
+    --pretrained_model_name_or_path amused/amused-512 \
     --instance_data_dataset  'monadical-labs/minecraft-preview' \
     --prompt_prefix 'minecraft ' \
     --image_key image \
@@ -429,7 +429,7 @@ accelerate launch training/train_amused.py \
     --train_batch_size <batch size> \
     --gradient_accumulation_steps <gradient accumulation steps> \
     --learning_rate 5e-6 \
-    --pretrained_model_name_or_path huggingface/amused-512 \
+    --pretrained_model_name_or_path amused/amused-512 \
     --instance_data_dataset  'monadical-labs/minecraft-preview' \
     --prompt_prefix 'minecraft ' \
     --image_key image \
@@ -466,7 +466,7 @@ accelerate launch training/train_amused.py \
     --gradient_accumulation_steps <gradient accumulation steps> \
     --learning_rate 1e-4 \
     --use_lora \
-    --pretrained_model_name_or_path huggingface/amused-512 \
+    --pretrained_model_name_or_path amused/amused-512 \
     --instance_data_dataset  'monadical-labs/minecraft-preview' \
     --prompt_prefix 'minecraft ' \
     --image_key image \
@@ -509,7 +509,7 @@ accelerate launch ./training/train_amused.py \
     --mixed_precision fp16 \
     --report_to wandb \
     --use_lora \
-    --pretrained_model_name_or_path huggingface/amused-256 \
+    --pretrained_model_name_or_path amused/amused-256 \
     --train_batch_size 1 \
     --lr_scheduler constant \
     --learning_rate 4e-4 \
@@ -541,7 +541,7 @@ accelerate launch ./training/train_amused.py \
     --mixed_precision fp16 \
     --report_to wandb \
     --use_lora \
-    --pretrained_model_name_or_path huggingface/amused-512 \
+    --pretrained_model_name_or_path amused/amused-512 \
     --train_batch_size 1 \
     --lr_scheduler constant \
     --learning_rate 1e-3 \

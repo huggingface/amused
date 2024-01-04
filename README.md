@@ -3,7 +3,10 @@
 ![collage](./assets/collage_small.png)
 <sup><sub>Images cherry-picked from 512 and 256 models. Images are degraded to load faster. See ./assets/collage_full.png for originals</sub></sup>
 
-[[Paper - TODO]]()
+📃 Paper: [aMUSEd: An Open MUSE Reproduction](https://huggingface.co/papers/2401.01808)
+📜 Blog post: [Welcome aMUSEd: Efficient Text-to-Image Generation](https://huggingface.co/blog/amused)
+▶️ Demo: https://huggingface.co/spaces/amused/amused
+🔋 Fine-tuning code: https://huggingface.co/blog/amused#fine-tuning-amused
 
 | Model | Params |
 |-------|--------|
@@ -564,12 +567,12 @@ TODO
 
 ## 5. Citation
 ```
-@misc{patil-etal-2023-amused,
-  author = {Suraj Patil and William Berman and Patrick von Platen},
-  title = {Amused: An open MUSE model},
-  year = {2023},
-  publisher = {GitHub},
-  journal = {GitHub repository},
-  howpublished = {\url{https://github.com/huggingface/amused}}
+@misc{patil2024amused,
+      title={aMUSEd: An Open MUSE Reproduction}, 
+      author={Suraj Patil and William Berman and Robin Rombach and Patrick von Platen},
+      year={2024},
+      eprint={2401.01808},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV}
 }
 ```

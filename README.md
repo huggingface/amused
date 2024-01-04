@@ -4,8 +4,11 @@
 <sup><sub>Images cherry-picked from 512 and 256 models. Images are degraded to load faster. See ./assets/collage_full.png for originals</sub></sup>
 
 📃 Paper: [aMUSEd: An Open MUSE Reproduction](https://huggingface.co/papers/2401.01808)
+
 📜 Blog post: [Welcome aMUSEd: Efficient Text-to-Image Generation](https://huggingface.co/blog/amused)
+
 ▶️ Demo: https://huggingface.co/spaces/amused/amused
+
 🔋 Fine-tuning code: https://huggingface.co/blog/amused#fine-tuning-amused
 
 | Model | Params |
@@ -563,7 +566,10 @@ accelerate launch ./training/train_amused.py \
 
 ## 4. Acknowledgements
 
-TODO
+Suraj led training. William led data and supported training. Patrick supported both training and
+data and provided general guidance. Robin trained the VQ-GAN and provided general guidance.
+Also, immense thanks to community contributor Isamu Isozaki for helpful discussions and code
+contributions.
 
 ## 5. Citation
 ```
